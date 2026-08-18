@@ -29,7 +29,8 @@ class ProxyConnector {
         sslForProxy: Boolean = false,
         sslForSSH: Boolean = false,
         directFallback: Boolean = false,
-        usePayload: Boolean = true
+        usePayload: Boolean = true,
+        useEnhanced: Boolean = false   // NEW
     ): Socket {
         require(proxyHost.isNotEmpty() && proxyPort in 1..65535) { "Invalid proxy address" }
         require(sshHost.isNotEmpty() && sshPort in 1..65535) { "Invalid SSH target" }
@@ -39,7 +40,7 @@ class ProxyConnector {
                     if (sslForSSH) " (SSL)" else "")
             return connectDirect(
                 sshHost, sshPort, proxyHost, proxyPort, payload, userAgent,
-                connectTimeout, splitDelayMs, sslForSSH, usePayload
+                connectTimeout, splitDelayMs, sslForSSH, usePayload, useEnhanced
             )
         }
 
@@ -90,69 +91,96 @@ class ProxyConnector {
             )
             LogManager.addLog("[ProxyConnector] Processed payload (first 200 chars):\n${processedPayload.take(200)}...")
             val parts = PayloadProcessor.splitPayload(processedPayload)
-            LogManager.addLog("[ProxyConnector] Split into ${parts.size} parts")
-            for ((index, part) in parts.withIndex()) {
-                output.write(part.toByteArray())
-                output.flush()
-                if (index < parts.size - 1 && splitDelayMs > 0) {
-                    Thread.sleep(splitDelayMs)
+
+            if (useEnhanced) {
+                // ----- ENHANCED MODE: Send parts one by one with response reading -----
+                LogManager.addLog("[ProxyConnector] Enhanced: ${parts.size} parts")
+                for ((index, part) in parts.withIndex()) {
+                    if (part.isBlank()) continue
+                    var toSend = part.trim()
+                    if (!toSend.endsWith("\r\n\r\n")) toSend += "\r\n\r\n"
+                    output.write(toSend.toByteArray())
+                    output.flush()
+                    LogManager.addLog("[ProxyConnector] Sent part ${index+1}/${parts.size}")
+
+                    // Read the complete response (headers + body) for this part
+                    val response = readFullResponse(input)
+                    LogManager.addLog("[ProxyConnector] Response for part ${index+1}: ${response.take(200)}")
+
+                    val status = extractStatus(response)
+                    // Accept interim statuses: 200, 101, 403, 302, 100
+                    if (status !in listOf(200, 101, 403, 302, 100)) {
+                        throw ProxyConnectionException("Unexpected status $status for part ${index+1}")
+                    }
+
+                    if (index < parts.size - 1) {
+                        Thread.sleep(splitDelayMs)
+                    }
                 }
+            } else {
+                // ----- STANDARD MODE: Send all parts at once -----
+                LogManager.addLog("[ProxyConnector] Split into ${parts.size} parts")
+                for ((index, part) in parts.withIndex()) {
+                    output.write(part.toByteArray())
+                    output.flush()
+                    if (index < parts.size - 1 && splitDelayMs > 0) {
+                        Thread.sleep(splitDelayMs)
+                    }
+                }
+                LogManager.addLog("[ProxyConnector] Payload sent (${parts.size} parts)")
             }
-            LogManager.addLog("[ProxyConnector] Payload sent (${parts.size} parts)")
         } else {
             LogManager.addLog("[ProxyConnector] No payload to send (usePayload=false)")
         }
 
-        // ---- READ THE RESPONSE ----
-        try {
-            socket.soTimeout = 10000 // 10 seconds for the response
-            val reader = BufferedReader(InputStreamReader(input))
+        // ---- READ THE RESPONSE (for standard mode) ----
+        if (!useEnhanced) {
+            try {
+                socket.soTimeout = 10000 // 10 seconds for the response
+                val reader = BufferedReader(InputStreamReader(input))
 
-            // Blocking read for the status line – do NOT use reader.ready() here!
-            var statusLine: String? = reader.readLine()
-            LogManager.addLog("[ProxyConnector] Server status: $statusLine")
+                var statusLine: String? = reader.readLine()
+                LogManager.addLog("[ProxyConnector] Server status: $statusLine")
 
-            // If statusLine is null or empty, try reading again with a short wait
-            if (statusLine == null || statusLine.isEmpty()) {
-                Thread.sleep(200)
-                statusLine = reader.readLine()
-                LogManager.addLog("[ProxyConnector] Delayed server status: $statusLine")
-            }
-
-            // Now read headers until an empty line
-            var line: String?
-            while (reader.ready().also { line = reader.readLine() } && line != null) {
-                if (line!!.isEmpty()) {
-                    LogManager.addLog("[ProxyConnector] End of HTTP headers")
-                    break
+                if (statusLine == null || statusLine.isEmpty()) {
+                    Thread.sleep(200)
+                    statusLine = reader.readLine()
+                    LogManager.addLog("[ProxyConnector] Delayed server status: $statusLine")
                 }
-                LogManager.addLog("[ProxyConnector] Response header: $line")
-                if (line!!.startsWith("SSH-2.0")) {
-                    LogManager.addLog("[ProxyConnector] SSH banner detected – stopping read")
-                    break
-                }
-            }
 
-            // Validate response
-            if (statusLine != null) {
-                val isAccepted = statusLine.startsWith("HTTP/1.1 2") ||
-                        statusLine.startsWith("HTTP/1.1 3") ||
-                        statusLine.contains("101") ||
-                        statusLine.contains("SSH-2.0")
-                if (!isAccepted) {
-                    LogManager.addLog("[ProxyConnector] Invalid response: $statusLine")
-                    socket.close()
-                    throw ProxyConnectionException("Server returned $statusLine")
+                var line: String?
+                while (reader.ready().also { line = reader.readLine() } && line != null) {
+                    if (line!!.isEmpty()) {
+                        LogManager.addLog("[ProxyConnector] End of HTTP headers")
+                        break
+                    }
+                    LogManager.addLog("[ProxyConnector] Response header: $line")
+                    if (line!!.startsWith("SSH-2.0")) {
+                        LogManager.addLog("[ProxyConnector] SSH banner detected – stopping read")
+                        break
+                    }
                 }
-                LogManager.addLog("[ProxyConnector] Server status accepted ($statusLine) – continuing to SSH")
-            } else {
-                LogManager.addLog("[ProxyConnector] No status line – assuming success")
-            }
 
-        } catch (e: java.net.SocketTimeoutException) {
-            LogManager.addLog("[ProxyConnector] Response read timed out – assuming SSH handshake can start")
-        } catch (e: Exception) {
-            LogManager.addLog("[ProxyConnector] Error reading response: ${e.message} – continuing")
+                if (statusLine != null) {
+                    val isAccepted = statusLine.startsWith("HTTP/1.1 2") ||
+                            statusLine.startsWith("HTTP/1.1 3") ||
+                            statusLine.contains("101") ||
+                            statusLine.contains("SSH-2.0")
+                    if (!isAccepted) {
+                        LogManager.addLog("[ProxyConnector] Invalid response: $statusLine")
+                        socket.close()
+                        throw ProxyConnectionException("Server returned $statusLine")
+                    }
+                    LogManager.addLog("[ProxyConnector] Server status accepted ($statusLine) – continuing to SSH")
+                } else {
+                    LogManager.addLog("[ProxyConnector] No status line – assuming success")
+                }
+
+            } catch (e: java.net.SocketTimeoutException) {
+                LogManager.addLog("[ProxyConnector] Response read timed out – assuming SSH handshake can start")
+            } catch (e: Exception) {
+                LogManager.addLog("[ProxyConnector] Error reading response: ${e.message} – continuing")
+            }
         }
 
         // ---- Reset timeout for SSH ----
@@ -162,7 +190,7 @@ class ProxyConnector {
         return socket
     }
 
-    // ---- Direct fallback (unchanged) ----
+    // ---- Direct fallback (updated to support enhanced) ----
     private fun connectDirect(
         sshHost: String,
         sshPort: Int,
@@ -173,7 +201,8 @@ class ProxyConnector {
         connectTimeout: Int,
         splitDelayMs: Long,
         sslForSSH: Boolean,
-        usePayload: Boolean
+        usePayload: Boolean,
+        useEnhanced: Boolean
     ): Socket {
         LogManager.addLog("[ProxyConnector] Direct connection to $sshHost:$sshPort" +
                 if (sslForSSH) " (SSL)" else "")
@@ -216,15 +245,33 @@ class ProxyConnector {
             )
             LogManager.addLog("[ProxyConnector] Processed payload (first 200 chars):\n${processedPayload.take(200)}...")
             val parts = PayloadProcessor.splitPayload(processedPayload)
-            LogManager.addLog("[ProxyConnector] Split into ${parts.size} parts")
-            for ((index, part) in parts.withIndex()) {
-                output.write(part.toByteArray())
-                output.flush()
-                if (index < parts.size - 1 && splitDelayMs > 0) {
-                    Thread.sleep(splitDelayMs)
+
+            if (useEnhanced) {
+                // Enhanced direct mode – send parts sequentially
+                LogManager.addLog("[ProxyConnector] Enhanced (direct): ${parts.size} parts")
+                for ((index, part) in parts.withIndex()) {
+                    if (part.isBlank()) continue
+                    var toSend = part.trim()
+                    if (!toSend.endsWith("\r\n\r\n")) toSend += "\r\n\r\n"
+                    output.write(toSend.toByteArray())
+                    output.flush()
+                    LogManager.addLog("[ProxyConnector] Sent part ${index+1}/${parts.size}")
+                    // Read response (though direct may not need it)
+                    if (index < parts.size - 1) {
+                        Thread.sleep(splitDelayMs)
+                    }
                 }
+            } else {
+                LogManager.addLog("[ProxyConnector] Split into ${parts.size} parts")
+                for ((index, part) in parts.withIndex()) {
+                    output.write(part.toByteArray())
+                    output.flush()
+                    if (index < parts.size - 1 && splitDelayMs > 0) {
+                        Thread.sleep(splitDelayMs)
+                    }
+                }
+                LogManager.addLog("[ProxyConnector] Direct payload sent (${parts.size} parts)")
             }
-            LogManager.addLog("[ProxyConnector] Direct payload sent (${parts.size} parts)")
         } else {
             LogManager.addLog("[ProxyConnector] Skipping payload (usePayload=false)")
         }
@@ -264,5 +311,24 @@ class ProxyConnector {
             }
         }
         return null
+    }
+
+    // Helper to read full response (headers + body) – used in enhanced mode
+    private fun readFullResponse(input: java.io.InputStream): String {
+        val reader = BufferedReader(InputStreamReader(input))
+        val response = StringBuilder()
+        var line: String? = reader.readLine()
+        while (line != null && line.isNotEmpty()) {
+            response.append(line).append("\n")
+            line = reader.readLine()
+        }
+        // Optionally read the body if Content-Length is present, but for handshake we don't need it.
+        return response.toString()
+    }
+
+    private fun extractStatus(response: String): Int {
+        val firstLine = response.lines().firstOrNull() ?: return 0
+        val parts = firstLine.split(" ")
+        return if (parts.size >= 2) parts[1].toIntOrNull() ?: 0 else 0
     }
 }
