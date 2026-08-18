@@ -4,12 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.net.VpnService
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
-import android.text.Editable
-import android.text.TextWatcher
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -45,8 +40,6 @@ class ConfigFragment : Fragment() {
     private lateinit var toggleButton: Button
     private lateinit var statusText: TextView
     private lateinit var localIpText: TextView
-
-    // Enhanced mode toggle – add this to your layout (fragment_config.xml)
     private lateinit var enhancedToggle: CheckBox
 
     private var currentSshHost: String = ""
@@ -70,9 +63,8 @@ class ConfigFragment : Fragment() {
     private var currentPingUrl: String = "https://dns.google"
     private var currentPingInterval: Int = 2000
     private var currentPingTimeout: Int = 5000
-    private var currentEnhanced: Boolean = false   // NEW
+    private var currentEnhanced: Boolean = false
 
-    private val VPN_REQUEST_CODE = 100
     private lateinit var configManager: ConfigManager
 
     private val statusReceiver = object : BroadcastReceiver() {
@@ -119,8 +111,6 @@ class ConfigFragment : Fragment() {
         toggleButton = view.findViewById(R.id.toggleButton)
         statusText = view.findViewById(R.id.statusText)
         localIpText = view.findViewById(R.id.localIpText)
-
-        // NEW: Enhanced toggle
         enhancedToggle = view.findViewById(R.id.enhancedToggle)
 
         configManager = ConfigManager(requireContext())
@@ -136,10 +126,8 @@ class ConfigFragment : Fragment() {
             }
         }
 
-        // Show local IP
         updateLocalIp()
 
-        // Register receiver for VPN status
         LocalBroadcastManager.getInstance(requireContext()).registerReceiver(
             statusReceiver,
             IntentFilter("VPN_STATUS")
@@ -167,7 +155,7 @@ class ConfigFragment : Fragment() {
         pingUrlInput.setText(config.pingUrl)
         pingIntervalInput.setText(config.pingInterval.toString())
         pingTimeoutInput.setText(config.pingTimeout.toString())
-        enhancedToggle.isChecked = config.enhanced   // NEW
+        enhancedToggle.isChecked = config.enhanced
     }
 
     private fun saveConfig() {
@@ -189,7 +177,7 @@ class ConfigFragment : Fragment() {
             pingUrl = pingUrlInput.text.toString(),
             pingInterval = pingIntervalInput.text.toString().toIntOrNull() ?: 2000,
             pingTimeout = pingTimeoutInput.text.toString().toIntOrNull() ?: 5000,
-            enhanced = enhancedToggle.isChecked   // NEW
+            enhanced = enhancedToggle.isChecked
         )
     }
 
@@ -218,7 +206,7 @@ class ConfigFragment : Fragment() {
         currentPingUrl = pingUrlInput.text.toString()
         currentPingInterval = pingIntervalInput.text.toString().toIntOrNull() ?: 2000
         currentPingTimeout = pingTimeoutInput.text.toString().toIntOrNull() ?: 5000
-        currentEnhanced = enhancedToggle.isChecked   // NEW
+        currentEnhanced = enhancedToggle.isChecked
 
         val serviceIntent = Intent(requireContext(), CustomVpnService::class.java)
         serviceIntent.action = CustomVpnService.ACTION_CONNECT
@@ -243,7 +231,7 @@ class ConfigFragment : Fragment() {
         serviceIntent.putExtra("pingUrl", currentPingUrl)
         serviceIntent.putExtra("pingInterval", currentPingInterval)
         serviceIntent.putExtra("pingTimeout", currentPingTimeout)
-        serviceIntent.putExtra("enhanced", currentEnhanced)   // NEW
+        serviceIntent.putExtra("enhanced", currentEnhanced)
 
         requireContext().startService(serviceIntent)
     }
@@ -254,7 +242,8 @@ class ConfigFragment : Fragment() {
         requireContext().startService(serviceIntent)
     }
 
-    private fun updateStatus(status: String, colorId: Int) {
+    // PUBLIC method – accessible from HttpCustomActivity
+    fun updateStatus(status: String, colorId: Int) {
         activity?.runOnUiThread {
             statusText.text = "Status: $status"
             statusText.setTextColor(ContextCompat.getColor(requireContext(), colorId))
