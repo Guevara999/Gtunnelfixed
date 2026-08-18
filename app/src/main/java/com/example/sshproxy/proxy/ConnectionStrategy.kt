@@ -5,29 +5,27 @@ import java.net.Socket
 
 class ConnectionStrategy {
 
-    private val connector = ProxyConnector()
-
     suspend fun establishTunnel(
         proxyHost: String,
         proxyPort: Int,
         sshHost: String,
         sshPort: Int,
         payload: String,
-        userAgent: String = "Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36",
+        userAgent: String,
         auth: ProxyAuth? = null,
         connectTimeout: Int = 25000,
         readTimeout: Int = 5000,
-        followRedirects: Boolean = false,
+        followRedirects: Boolean = true,
         splitDelayMs: Long = 500,
         useSsl: Boolean = false,
-        usePayload: Boolean = true
+        usePayload: Boolean = true,
+        useEnhanced: Boolean = false   // NEW
     ): Socket {
-        LogManager.addLog("[Strategy] Starting connection attempt...")
-        LogManager.addLog("[Strategy] Proxy: $proxyHost:$proxyPort, SSH: $sshHost:$sshPort")
+        val connector = ProxyConnector()
 
+        // Try proxy mode first
         try {
-            LogManager.addLog("[Strategy] Attempt 1: Real proxy CONNECT")
-            val result = connector.connectViaProxy(
+            return connector.connectViaProxy(
                 proxyHost = proxyHost,
                 proxyPort = proxyPort,
                 sshHost = sshHost,
@@ -42,57 +40,32 @@ class ConnectionStrategy {
                 sslForProxy = useSsl,
                 sslForSSH = useSsl,
                 directFallback = false,
-                usePayload = usePayload
+                usePayload = usePayload,
+                useEnhanced = useEnhanced
             )
-            LogManager.addLog("[Strategy] ✅ Proxy CONNECT succeeded")
-            return result
         } catch (e: ProxyConnectionException) {
-            val msg = e.message ?: ""
-            LogManager.addLog("[Strategy] ⚠️ Proxy CONNECT failed: $msg")
-            if (msg.contains("302") || msg.contains("redirect") ||
-                msg.contains("400") || msg.contains("403") ||
-                msg.contains("timeout") || msg.contains("Bad Request")) {
-                LogManager.addLog("[Strategy] Falling back to direct spoofing...")
-                return tryDirectSpoof(
-                    proxyHost, proxyPort, sshHost, sshPort,
-                    payload, userAgent, connectTimeout, readTimeout, splitDelayMs, useSsl, usePayload
-                )
-            } else {
-                throw e
-            }
+            LogManager.addLog("[Strategy] Proxy mode failed: ${e.message}")
         }
-    }
 
-    private suspend fun tryDirectSpoof(
-        proxyHost: String,
-        proxyPort: Int,
-        sshHost: String,
-        sshPort: Int,
-        payload: String,
-        userAgent: String,
-        connectTimeout: Int,
-        readTimeout: Int,
-        splitDelayMs: Long,
-        useSsl: Boolean,
-        usePayload: Boolean
-    ): Socket {
-        LogManager.addLog("[Strategy] Direct spoofing to $sshHost:$sshPort")
+        // Fallback: direct spoofing
+        LogManager.addLog("[Strategy] Falling back to direct spoofing")
         return connector.connectViaProxy(
-            proxyHost = proxyHost,
-            proxyPort = proxyPort,
+            proxyHost = sshHost,
+            proxyPort = sshPort,
             sshHost = sshHost,
             sshPort = sshPort,
             payload = payload,
             userAgent = userAgent,
-            auth = null,
+            auth = auth,
             connectTimeout = connectTimeout,
             readTimeout = readTimeout,
-            followRedirects = false,
+            followRedirects = followRedirects,
             splitDelayMs = splitDelayMs,
-            sslForProxy = useSsl,
+            sslForProxy = false,
             sslForSSH = useSsl,
             directFallback = true,
-            usePayload = usePayload
+            usePayload = usePayload,
+            useEnhanced = useEnhanced
         )
     }
 }
