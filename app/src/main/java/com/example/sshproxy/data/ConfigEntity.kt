@@ -21,5 +21,6 @@ data class ConfigEntity(
     val pingInterval: Int = 2000,
     val pingTimeout: Int = 5000,
     val alwaysReconnect: Boolean = false,
-    val followRedirects: Boolean = true   // NEW
+    val followRedirects: Boolean = true,
+    val enhanced: Boolean = false   // NEW
 )
