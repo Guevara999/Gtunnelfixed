@@ -120,10 +120,8 @@ class ConfigFragment : Fragment() {
     private fun startVpnWithPermissionCheck() {
         val intent = VpnService.prepare(requireContext())
         if (intent != null) {
-            // Permission not granted – show system dialog using startActivityForResult
             startActivityForResult(intent, VPN_REQUEST_CODE)
         } else {
-            // Permission already granted
             doStartVpnService()
         }
     }
@@ -224,11 +222,10 @@ class ConfigFragment : Fragment() {
         val serviceIntent = Intent(requireContext(), CustomVpnService::class.java)
         serviceIntent.action = CustomVpnService.ACTION_DISCONNECT
         requireContext().startService(serviceIntent)
-        toggleButton.text = "Connect"
-        toggleButton.setBackgroundColor(ContextCompat.getColor(requireContext(), android.R.color.holo_green_dark))
+        // The button will be updated by the statusReceiver when "Disconnected" is broadcast
+        Toast.makeText(requireContext(), "Disconnecting...", Toast.LENGTH_SHORT).show()
     }
 
-    // PUBLIC method – accessible from HttpCustomActivity
     fun updateStatus(status: String, colorId: Int) {
         activity?.runOnUiThread {
             statusText.text = "Status: $status"
