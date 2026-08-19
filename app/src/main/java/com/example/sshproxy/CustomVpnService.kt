@@ -88,7 +88,7 @@ class CustomVpnService : VpnService() {
     private var pingUrl: String = "https://dns.google"
     private var pingInterval: Int = 2000
     private var pingTimeout: Int = 10000
-    private var enhanced: Boolean = false   // <-- NEW
+    private var enhanced: Boolean = false
 
     override fun onCreate() {
         super.onCreate()
@@ -140,7 +140,7 @@ class CustomVpnService : VpnService() {
         pingUrl = intent.getStringExtra("pingUrl") ?: "https://dns.google"
         pingInterval = intent.getIntExtra("pingInterval", 2000)
         pingTimeout = intent.getIntExtra("pingTimeout", 10000)
-        enhanced = intent.getBooleanExtra("enhanced", false)   // <-- NEW
+        enhanced = intent.getBooleanExtra("enhanced", false)
         LogManager.addLog("[DEBUG] Payload received: ${payload.take(100)}...")
         LogManager.addLog("[DEBUG] Enhanced mode: $enhanced")
     }
@@ -229,7 +229,7 @@ class CustomVpnService : VpnService() {
                 splitDelayMs = splitDelayMs.toLong(),
                 useSsl = useSsl,
                 usePayload = usePayload,
-                useEnhanced = enhanced   // <-- NEW
+                useEnhanced = enhanced
             )
         } catch (e: ProxyConnectionException) {
             LogManager.addLog("[ERROR] All connection strategies failed: ${e.message}")
@@ -293,54 +293,67 @@ class CustomVpnService : VpnService() {
             return
         }
 
-        // Let hev-socks5-tunnel take full control
-        vpnInterface = Builder()
-            .addAddress("10.255.255.1", 32)   // dummy – will be overwritten by hev
-            .setMtu(mtu)
-            .establish()
-
-        if (vpnInterface == null) {
-            LogManager.addLog("[ERROR] VPN interface creation failed")
-            return
-        }
-
-        Thread.sleep(500)
-
-        // Start SOCKS5 proxy
         try {
-            val proxy = LocalSocks5Proxy(sshSession!!)
-            socksPort = proxy.start()
-            socksProxy = proxy
-            LogManager.addLog("[SOCKS5] Proxy running on 127.0.0.1:$socksPort")
-        } catch (e: Exception) {
-            LogManager.addLog("[ERROR] SOCKS5 proxy failed: ${e.message}")
-            throw e
-        }
+            // Create TUN interface with default route
+            vpnInterface = Builder()
+                .addAddress("10.255.255.1", 32)   // dummy – will be overwritten by hev
+                .addRoute("0.0.0.0", 0)            // DEFAULT ROUTE – CRITICAL
+                .setMtu(mtu)
+                .establish()
 
-        // Write YAML config – hev manages everything here
-        val configPath = createTProxyConfig(socksPort, mtu)
-        if (configPath == null) {
-            LogManager.addLog("[ERROR] Failed to create tproxy config")
+            if (vpnInterface == null) {
+                LogManager.addLog("[ERROR] VPN interface creation failed (null)")
+                stopSelf()
+                return
+            }
+
+            LogManager.addLog("VPN interface created successfully")
+            Thread.sleep(500)
+
+            // Start SOCKS5 proxy
+            try {
+                val proxy = LocalSocks5Proxy(sshSession!!)
+                socksPort = proxy.start()
+                socksProxy = proxy
+                LogManager.addLog("[SOCKS5] Proxy running on 127.0.0.1:$socksPort")
+            } catch (e: Exception) {
+                LogManager.addLog("[ERROR] SOCKS5 proxy failed: ${e.message}")
+                throw e
+            }
+
+            // Write YAML config – hev manages everything here
+            val configPath = createTProxyConfig(socksPort, mtu)
+            if (configPath == null) {
+                LogManager.addLog("[ERROR] Failed to create tproxy config")
+                stopSelf()
+                return
+            }
+            LogManager.addLog("[tproxy] Config written to $configPath")
+
+            // Start hev
+            val tunFd = vpnInterface!!.fd
+            try {
+                LogManager.addLog("[hev-socks5-tunnel] Starting with config=$configPath, tunFd=$tunFd")
+                TProxyService.TProxyStartService(configPath, tunFd)
+                LogManager.addLog("[hev-socks5-tunnel] Started successfully")
+            } catch (e: UnsatisfiedLinkError) {
+                LogManager.addLog("[ERROR] Native library not loaded: ${e.message}")
+                throw e
+            } catch (e: Exception) {
+                LogManager.addLog("[ERROR] hev-socks5-tunnel exception: ${e.message}")
+                throw e
+            }
+
+            LogManager.addLog("VPN and SOCKS5 tunnel ready (hev manages routing)")
+
+        } catch (e: SecurityException) {
+            LogManager.addLog("[ERROR] VPN permission not granted: ${e.message}")
             stopSelf()
-            return
-        }
-        LogManager.addLog("[tproxy] Config written to $configPath")
-
-        // Start hev
-        val tunFd = vpnInterface!!.fd
-        try {
-            LogManager.addLog("[hev-socks5-tunnel] Starting with config=$configPath, tunFd=$tunFd")
-            TProxyService.TProxyStartService(configPath, tunFd)
-            LogManager.addLog("[hev-socks5-tunnel] Started successfully")
-        } catch (e: UnsatisfiedLinkError) {
-            LogManager.addLog("[ERROR] Native library not loaded: ${e.message}")
-            throw e
         } catch (e: Exception) {
-            LogManager.addLog("[ERROR] hev-socks5-tunnel exception: ${e.message}")
-            throw e
+            LogManager.addLog("[ERROR] VPN setup failed: ${e.message}")
+            e.printStackTrace()
+            stopSelf()
         }
-
-        LogManager.addLog("VPN and SOCKS5 tunnel ready (hev manages routing)")
     }
 
     private fun createTProxyConfig(socksPort: Int, mtu: Int): String? {
@@ -359,7 +372,7 @@ class CustomVpnService : VpnService() {
                       ipv4: 10.0.0.2/24
                       icmp: 'reply'
                       routes:
-                        - "0.0.0.0/0"
+                        - "0.0.0.0/0"          # DEFAULT ROUTE
                     socks5:
                       port: $socksPort
                       address: '127.0.0.1'
