@@ -1,9 +1,11 @@
 package com.example.sshproxy
 
+import android.app.Activity
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.VpnService
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
@@ -12,6 +14,7 @@ import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.TextView
+import android.widget.Toast
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
@@ -42,30 +45,8 @@ class ConfigFragment : Fragment() {
     private lateinit var localIpText: TextView
     private lateinit var enhancedToggle: CheckBox
 
-    private var currentSshHost: String = ""
-    private var currentSshPort: String = ""
-    private var currentSshUser: String = ""
-    private var currentSshPass: String = ""
-    private var currentProxyHost: String = ""
-    private var currentProxyPort: String = ""
-    private var currentPayload: String = ""
-    private var currentSplitDelay: Int = 500
-    private var currentDnsPrimary: String = "1.1.1.1"
-    private var currentDnsSecondary: String = "1.0.0.1"
-    private var currentEnableCompression: Boolean = true
-    private var currentAlwaysReconnect: Boolean = false
-    private var currentFollowRedirects: Boolean = true
-    private var currentUsePayload: Boolean = true
-    private var currentProxySsl: Boolean = false
-    private var currentMtu: Int = 1500
-    private var currentSendBuffer: Int = 16384
-    private var currentReceiveBuffer: Int = 32768
-    private var currentPingUrl: String = "https://dns.google"
-    private var currentPingInterval: Int = 2000
-    private var currentPingTimeout: Int = 5000
-    private var currentEnhanced: Boolean = false
-
     private lateinit var configManager: ConfigManager
+    private val VPN_REQUEST_CODE = 100
 
     private val statusReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -114,13 +95,12 @@ class ConfigFragment : Fragment() {
         enhancedToggle = view.findViewById(R.id.enhancedToggle)
 
         configManager = ConfigManager(requireContext())
-
         loadSavedConfig()
 
         toggleButton.setOnClickListener {
             if (toggleButton.text == "Connect") {
                 saveConfig()
-                startVpnService()
+                startVpnWithPermissionCheck()
             } else {
                 stopVpnService()
             }
@@ -136,6 +116,77 @@ class ConfigFragment : Fragment() {
         return view
     }
 
+    // ---------- VPN Permission ----------
+    private fun startVpnWithPermissionCheck() {
+        val intent = VpnService.prepare(requireContext())
+        if (intent != null) {
+            // Permission not granted – show system dialog
+            try {
+                startIntentSenderForResult(
+                    intent.intentSender,
+                    VPN_REQUEST_CODE,
+                    null,
+                    0,
+                    0,
+                    0,
+                    null
+                )
+            } catch (e: Exception) {
+                Toast.makeText(requireContext(), "Failed to request VPN permission: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            // Permission already granted
+            doStartVpnService()
+        }
+    }
+
+    private fun doStartVpnService() {
+        val serviceIntent = Intent(requireContext(), CustomVpnService::class.java)
+        serviceIntent.action = CustomVpnService.ACTION_CONNECT
+        serviceIntent.putExtra("sshHost", sshDetailsInput.text.toString())
+        serviceIntent.putExtra("sshPort", "80")
+        val sshParts = sshDetailsInput.text.toString().split("@")
+        val credentials = sshParts.getOrNull(1)?.split(":") ?: listOf()
+        serviceIntent.putExtra("sshUser", credentials.getOrNull(0) ?: "")
+        serviceIntent.putExtra("sshPass", credentials.getOrNull(1) ?: "")
+        val proxyParts = proxyInput.text.toString().split(":")
+        serviceIntent.putExtra("proxyHost", proxyParts.getOrNull(0) ?: "")
+        serviceIntent.putExtra("proxyPort", proxyParts.getOrNull(1) ?: "80")
+        serviceIntent.putExtra("payload", payloadInput.text.toString())
+        serviceIntent.putExtra("splitDelay", splitDelayInput.text.toString().toIntOrNull() ?: 500)
+        serviceIntent.putExtra("dnsPrimary", dnsPrimaryInput.text.toString())
+        serviceIntent.putExtra("dnsSecondary", dnsSecondaryInput.text.toString())
+        serviceIntent.putExtra("enableCompression", enableCompressionCheck.isChecked)
+        serviceIntent.putExtra("alwaysReconnect", alwaysReconnectCheck.isChecked)
+        serviceIntent.putExtra("followRedirects", followRedirectsCheck.isChecked)
+        serviceIntent.putExtra("usePayload", usePayloadCheck.isChecked)
+        serviceIntent.putExtra("proxySsl", proxySslCheck.isChecked)
+        serviceIntent.putExtra("mtu", mtuInput.text.toString().toIntOrNull() ?: 1500)
+        serviceIntent.putExtra("sendBuffer", sendBufferInput.text.toString().toIntOrNull() ?: 16384)
+        serviceIntent.putExtra("receiveBuffer", receiveBufferInput.text.toString().toIntOrNull() ?: 32768)
+        serviceIntent.putExtra("pingUrl", pingUrlInput.text.toString())
+        serviceIntent.putExtra("pingInterval", pingIntervalInput.text.toString().toIntOrNull() ?: 2000)
+        serviceIntent.putExtra("pingTimeout", pingTimeoutInput.text.toString().toIntOrNull() ?: 10000)
+        serviceIntent.putExtra("enhanced", enhancedToggle.isChecked)
+
+        requireContext().startService(serviceIntent)
+        toggleButton.text = "Disconnect"
+        Toast.makeText(requireContext(), "Connecting...", Toast.LENGTH_SHORT).show()
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == VPN_REQUEST_CODE) {
+            if (resultCode == Activity.RESULT_OK) {
+                Toast.makeText(requireContext(), "VPN permission granted", Toast.LENGTH_SHORT).show()
+                doStartVpnService()
+            } else {
+                Toast.makeText(requireContext(), "VPN permission denied", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    // ---------- Config Save/Load ----------
     private fun loadSavedConfig() {
         val config = configManager.getConfig()
         sshDetailsInput.setText(config.sshDetails)
@@ -181,69 +232,15 @@ class ConfigFragment : Fragment() {
         )
     }
 
-    private fun startVpnService() {
-        currentSshHost = sshDetailsInput.text.toString()
-        currentSshPort = "80"
-        val sshParts = currentSshHost.split("@")
-        val credentials = sshParts.getOrNull(1)?.split(":") ?: listOf()
-        currentSshUser = credentials.getOrNull(0) ?: ""
-        currentSshPass = credentials.getOrNull(1) ?: ""
-        val proxyParts = proxyInput.text.toString().split(":")
-        currentProxyHost = proxyParts.getOrNull(0) ?: ""
-        currentProxyPort = proxyParts.getOrNull(1) ?: "80"
-        currentPayload = payloadInput.text.toString()
-        currentSplitDelay = splitDelayInput.text.toString().toIntOrNull() ?: 500
-        currentDnsPrimary = dnsPrimaryInput.text.toString()
-        currentDnsSecondary = dnsSecondaryInput.text.toString()
-        currentEnableCompression = enableCompressionCheck.isChecked
-        currentAlwaysReconnect = alwaysReconnectCheck.isChecked
-        currentFollowRedirects = followRedirectsCheck.isChecked
-        currentUsePayload = usePayloadCheck.isChecked
-        currentProxySsl = proxySslCheck.isChecked
-        currentMtu = mtuInput.text.toString().toIntOrNull() ?: 1500
-        currentSendBuffer = sendBufferInput.text.toString().toIntOrNull() ?: 16384
-        currentReceiveBuffer = receiveBufferInput.text.toString().toIntOrNull() ?: 32768
-        currentPingUrl = pingUrlInput.text.toString()
-        currentPingInterval = pingIntervalInput.text.toString().toIntOrNull() ?: 2000
-        currentPingTimeout = pingTimeoutInput.text.toString().toIntOrNull() ?: 5000
-        currentEnhanced = enhancedToggle.isChecked
-
-        val serviceIntent = Intent(requireContext(), CustomVpnService::class.java)
-        serviceIntent.action = CustomVpnService.ACTION_CONNECT
-        serviceIntent.putExtra("sshHost", currentSshHost)
-        serviceIntent.putExtra("sshPort", currentSshPort)
-        serviceIntent.putExtra("sshUser", currentSshUser)
-        serviceIntent.putExtra("sshPass", currentSshPass)
-        serviceIntent.putExtra("proxyHost", currentProxyHost)
-        serviceIntent.putExtra("proxyPort", currentProxyPort)
-        serviceIntent.putExtra("payload", currentPayload)
-        serviceIntent.putExtra("splitDelay", currentSplitDelay)
-        serviceIntent.putExtra("dnsPrimary", currentDnsPrimary)
-        serviceIntent.putExtra("dnsSecondary", currentDnsSecondary)
-        serviceIntent.putExtra("enableCompression", currentEnableCompression)
-        serviceIntent.putExtra("alwaysReconnect", currentAlwaysReconnect)
-        serviceIntent.putExtra("followRedirects", currentFollowRedirects)
-        serviceIntent.putExtra("usePayload", currentUsePayload)
-        serviceIntent.putExtra("proxySsl", currentProxySsl)
-        serviceIntent.putExtra("mtu", currentMtu)
-        serviceIntent.putExtra("sendBuffer", currentSendBuffer)
-        serviceIntent.putExtra("receiveBuffer", currentReceiveBuffer)
-        serviceIntent.putExtra("pingUrl", currentPingUrl)
-        serviceIntent.putExtra("pingInterval", currentPingInterval)
-        serviceIntent.putExtra("pingTimeout", currentPingTimeout)
-        serviceIntent.putExtra("enhanced", currentEnhanced)
-
-        requireContext().startService(serviceIntent)
-    }
-
     private fun stopVpnService() {
         val serviceIntent = Intent(requireContext(), CustomVpnService::class.java)
         serviceIntent.action = CustomVpnService.ACTION_DISCONNECT
         requireContext().startService(serviceIntent)
+        toggleButton.text = "Connect"
+        toggleButton.setBackgroundColor(ContextCompat.getColor(requireContext(), android.R.color.holo_green_dark))
     }
 
-    // PUBLIC method – accessible from HttpCustomActivity
-    fun updateStatus(status: String, colorId: Int) {
+    private fun updateStatus(status: String, colorId: Int) {
         activity?.runOnUiThread {
             statusText.text = "Status: $status"
             statusText.setTextColor(ContextCompat.getColor(requireContext(), colorId))
