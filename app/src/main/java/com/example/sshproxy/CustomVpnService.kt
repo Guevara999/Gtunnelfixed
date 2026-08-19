@@ -364,6 +364,7 @@ class CustomVpnService : VpnService() {
         }
     }
 
+    // ✅ FIXED: SOCKS5 address changed to '10.0.0.1' (VPN gateway)
     private fun createTProxyConfig(socksPort: Int, mtu: Int): String? {
         return try {
             val configFile = File(filesDir, "tproxy.conf")
@@ -383,7 +384,7 @@ class CustomVpnService : VpnService() {
                         - "0.0.0.0/0"
                     socks5:
                       port: $socksPort
-                      address: '127.0.0.1'
+                      address: '10.0.0.1'   // ← CRITICAL FIX
                       udp: 'udp'
                     mapdns:
                       address: '1.1.1.1'
