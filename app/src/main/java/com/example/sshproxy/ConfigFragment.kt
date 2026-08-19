@@ -120,20 +120,8 @@ class ConfigFragment : Fragment() {
     private fun startVpnWithPermissionCheck() {
         val intent = VpnService.prepare(requireContext())
         if (intent != null) {
-            // Permission not granted – show system dialog
-            try {
-                startIntentSenderForResult(
-                    intent.intentSender,  // fixed: use intent.intentSender
-                    VPN_REQUEST_CODE,
-                    null,
-                    0,
-                    0,
-                    0,
-                    null
-                )
-            } catch (e: Exception) {
-                Toast.makeText(requireContext(), "Failed to request VPN permission: ${e.message}", Toast.LENGTH_SHORT).show()
-            }
+            // Permission not granted – show system dialog using startActivityForResult
+            startActivityForResult(intent, VPN_REQUEST_CODE)
         } else {
             // Permission already granted
             doStartVpnService()
