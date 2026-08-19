@@ -4,6 +4,7 @@ import com.jcraft.jsch.ChannelDirectTCPIP
 import com.jcraft.jsch.Session
 import java.io.InputStream
 import java.io.OutputStream
+import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketException
@@ -16,12 +17,19 @@ class LocalSocks5Proxy(private val sshSession: Session) {
     private var serverSocket: ServerSocket? = null
     private var isRunning = false
     private var port = 0
+    private var boundAddress: String = ""
 
-    fun start(): Int {
-        serverSocket = ServerSocket(0)
+    /**
+     * Start the SOCKS5 proxy on a random port, bound to the given address.
+     * @param bindAddress IP address to bind to (e.g., "10.0.0.1" for VPN gateway)
+     * @return the port number the proxy is listening on
+     */
+    fun start(bindAddress: String = "0.0.0.0"): Int {
+        serverSocket = ServerSocket(0, 50, InetAddress.getByName(bindAddress))
         port = serverSocket!!.localPort
+        boundAddress = bindAddress
         isRunning = true
-        LogManager.addLog("[SOCKS5] Proxy started on port $port")
+        LogManager.addLog("[SOCKS5] Proxy started on $bindAddress:$port")
         Thread { acceptLoop() }.start()
         return port
     }
