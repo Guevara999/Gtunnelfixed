@@ -123,7 +123,7 @@ class ConfigFragment : Fragment() {
             // Permission not granted – show system dialog
             try {
                 startIntentSenderForResult(
-                    intent.intentSender,
+                    intent.intentSender,  // fixed: use intent.intentSender
                     VPN_REQUEST_CODE,
                     null,
                     0,
@@ -240,7 +240,8 @@ class ConfigFragment : Fragment() {
         toggleButton.setBackgroundColor(ContextCompat.getColor(requireContext(), android.R.color.holo_green_dark))
     }
 
-    private fun updateStatus(status: String, colorId: Int) {
+    // PUBLIC method – accessible from HttpCustomActivity
+    fun updateStatus(status: String, colorId: Int) {
         activity?.runOnUiThread {
             statusText.text = "Status: $status"
             statusText.setTextColor(ContextCompat.getColor(requireContext(), colorId))
