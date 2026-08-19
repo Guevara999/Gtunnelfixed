@@ -10,10 +10,21 @@ public class PayloadProcessor {
     public static String processPayload(String template, String host, String port, String proxy, String userAgent) {
         String payload = template;
 
+        // --- Extract clean host (remove @username:password if present) ---
+        String cleanHost = host;
+        if (cleanHost.contains("@")) {
+            cleanHost = cleanHost.substring(0, cleanHost.indexOf("@"));
+        }
+        // If host already contains a port, use it; otherwise append port
+        String hostWithPort = cleanHost;
+        if (port != null && !port.isEmpty() && !cleanHost.contains(":")) {
+            hostWithPort = cleanHost + ":" + port;
+        }
+
         // Basic replacements
         payload = payload.replace("[crlf]", "\r\n");
-        payload = payload.replace("[host]", host);
-        payload = payload.replace("[rlb]", host);
+        payload = payload.replace("[host]", hostWithPort);   // <-- FIXED
+        payload = payload.replace("[rlb]", hostWithPort);
         payload = payload.replace("[port]", port);
 
         if (proxy != null && !proxy.isEmpty()) {
@@ -25,7 +36,7 @@ public class PayloadProcessor {
         }
         payload = payload.replace("[ua]", userAgent);
 
-        payload = payload.replace("[https/host]", "https://" + host);
+        payload = payload.replace("[https/host]", "https://" + hostWithPort);
 
         // Normalize raw newlines
         payload = payload.replaceAll("(?<!\\r)\\n", "\r\n");
@@ -43,7 +54,6 @@ public class PayloadProcessor {
     }
 
     public static String[] splitPayload(String payload) {
-        // Split on literal [split] token
         return payload.split("\\[split\\]");
     }
 
