@@ -294,10 +294,10 @@ class CustomVpnService : VpnService() {
         }
 
         try {
-            // Create TUN interface with default route
+            // Create TUN interface with the same IP as hev config
             vpnInterface = Builder()
-                .addAddress("10.255.255.1", 32)   // dummy – will be overwritten by hev
-                .addRoute("0.0.0.0", 0)            // DEFAULT ROUTE – CRITICAL
+                .addAddress("10.0.0.2", 24)   // match hev config
+                .addRoute("0.0.0.0", 0)       // default route
                 .setMtu(mtu)
                 .establish()
 
@@ -307,7 +307,7 @@ class CustomVpnService : VpnService() {
                 return
             }
 
-            LogManager.addLog("VPN interface created successfully")
+            LogManager.addLog("VPN interface created successfully (IP: 10.0.0.2/24)")
             Thread.sleep(500)
 
             // Start SOCKS5 proxy
@@ -321,7 +321,7 @@ class CustomVpnService : VpnService() {
                 throw e
             }
 
-            // Write YAML config – hev manages everything here
+            // Write YAML config
             val configPath = createTProxyConfig(socksPort, mtu)
             if (configPath == null) {
                 LogManager.addLog("[ERROR] Failed to create tproxy config")
@@ -329,6 +329,14 @@ class CustomVpnService : VpnService() {
                 return
             }
             LogManager.addLog("[tproxy] Config written to $configPath")
+
+            // Log config content for debugging
+            try {
+                val configContent = File(configPath).readText()
+                LogManager.addLog("[tproxy] Config content:\n$configContent")
+            } catch (e: Exception) {
+                // ignore
+            }
 
             // Start hev
             val tunFd = vpnInterface!!.fd
@@ -372,7 +380,7 @@ class CustomVpnService : VpnService() {
                       ipv4: 10.0.0.2/24
                       icmp: 'reply'
                       routes:
-                        - "0.0.0.0/0"          # DEFAULT ROUTE
+                        - "0.0.0.0/0"
                     socks5:
                       port: $socksPort
                       address: '127.0.0.1'
@@ -400,6 +408,7 @@ class CustomVpnService : VpnService() {
         pingJob?.cancel()
         stateJob?.cancel()
 
+        // Stop hev – catch any errors
         try {
             TProxyService.TProxyStopService()
             LogManager.addLog("[hev-socks5-tunnel] Stopped")
@@ -407,23 +416,50 @@ class CustomVpnService : VpnService() {
             LogManager.addLog("[ERROR] Failed to stop hev-socks5-tunnel: ${e.message}")
         }
 
-        socksProxy?.stop()
-        socksProxy = null
+        // Stop SOCKS5 proxy
+        try {
+            socksProxy?.stop()
+            socksProxy = null
+        } catch (e: Exception) {
+            LogManager.addLog("[ERROR] Failed to stop SOCKS5 proxy: ${e.message}")
+        }
 
-        sshSession?.disconnect()
-        sshSession = null
-        tunnelSocket?.close()
-        tunnelSocket = null
-        vpnInterface?.close()
-        vpnInterface = null
+        // Disconnect SSH
+        try {
+            sshSession?.disconnect()
+            sshSession = null
+        } catch (e: Exception) {
+            LogManager.addLog("[ERROR] Failed to disconnect SSH: ${e.message}")
+        }
 
+        // Close tunnel socket
+        try {
+            tunnelSocket?.close()
+            tunnelSocket = null
+        } catch (e: Exception) {
+            LogManager.addLog("[ERROR] Failed to close tunnel socket: ${e.message}")
+        }
+
+        // Close VPN interface
+        try {
+            vpnInterface?.close()
+            vpnInterface = null
+        } catch (e: Exception) {
+            LogManager.addLog("[ERROR] Failed to close VPN interface: ${e.message}")
+        }
+
+        // Stop foreground
         stopForeground(true)
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.cancel(NOTIFICATION_ID)
+
         sendStatus("Disconnected")
         LogManager.addLog("VPN stopped")
         releaseWakeLock()
         _state.value = VpnState.IDLE
+
+        // Ensure service stops
+        stopSelf()
     }
 
     private fun reconnect() {
@@ -450,6 +486,7 @@ class CustomVpnService : VpnService() {
         }
     }
 
+    // --- Ping ---
     private fun startPing() {
         pingJob = CoroutineScope(Dispatchers.IO).launch {
             while (isConnected.get()) {
