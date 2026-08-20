@@ -4,6 +4,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
+import android.net.NetworkInterface
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
@@ -22,8 +23,11 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.io.BufferedReader
 import java.io.File
 import java.io.FileOutputStream
+import java.io.InputStreamReader
+import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.SocketTimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
@@ -321,6 +325,52 @@ class CustomVpnService : VpnService() {
                 throw e
             }
 
+            // ========== DIAGNOSTIC: Test proxy reachability ==========
+            try {
+                val testSocket = Socket()
+                testSocket.connect(InetSocketAddress("127.0.0.1", socksPort), 2000)
+                LogManager.addLog("[DIAG] ✅ Proxy reachable at 127.0.0.1:$socksPort")
+                testSocket.close()
+            } catch (e: Exception) {
+                LogManager.addLog("[DIAG] ❌ Proxy NOT reachable at 127.0.0.1:$socksPort – ${e.message}")
+            }
+
+            // ========== DIAGNOSTIC: Test end-to-end through proxy ==========
+            try {
+                val sock = Socket("127.0.0.1", socksPort)
+                val out = sock.getOutputStream()
+                val inp = sock.getInputStream()
+
+                // SOCKS5 handshake
+                out.write(byteArrayOf(0x05, 0x01, 0x00))
+                out.flush()
+                val resp = ByteArray(2)
+                inp.read(resp)
+                if (resp[0] == 0x05.toByte() && resp[1] == 0x00.toByte()) {
+                    // CONNECT to 1.1.1.1:80
+                    out.write(byteArrayOf(0x05, 0x01, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x50))
+                    out.flush()
+                    val bind = ByteArray(10)
+                    inp.read(bind)
+                    if (bind[1] == 0x00.toByte()) {
+                        // Send HTTP GET
+                        val request = "GET / HTTP/1.1\r\nHost: 1.1.1.1\r\nConnection: close\r\n\r\n"
+                        out.write(request.toByteArray())
+                        out.flush()
+                        val reader = BufferedReader(InputStreamReader(inp))
+                        val status = reader.readLine()
+                        LogManager.addLog("[DIAG] ✅ HTTP through proxy: $status")
+                    } else {
+                        LogManager.addLog("[DIAG] ❌ SOCKS CONNECT failed (bind response ${bind[1]})")
+                    }
+                } else {
+                    LogManager.addLog("[DIAG] ❌ SOCKS handshake failed (resp: ${resp.joinToString()})")
+                }
+                sock.close()
+            } catch (e: Exception) {
+                LogManager.addLog("[DIAG] ❌ Proxy test error: ${e.message}")
+            }
+
             // Write YAML config
             val configPath = createTProxyConfig(socksPort, mtu)
             if (configPath == null) {
@@ -346,10 +396,35 @@ class CustomVpnService : VpnService() {
                 LogManager.addLog("[hev-socks5-tunnel] Started successfully")
             } catch (e: UnsatisfiedLinkError) {
                 LogManager.addLog("[ERROR] Native library not loaded: ${e.message}")
+                LogManager.addLog("[DIAG] ❌ Native library load FAILED")
                 throw e
             } catch (e: Exception) {
                 LogManager.addLog("[ERROR] hev-socks5-tunnel exception: ${e.message}")
+                LogManager.addLog("[DIAG] ❌ hev start exception: ${e.message}")
                 throw e
+            }
+
+            // ========== DIAGNOSTIC: Check if tun0 exists ==========
+            try {
+                val interfaces = NetworkInterface.getNetworkInterfaces()
+                var foundTun = false
+                var tunAddr = ""
+                while (interfaces.hasMoreElements()) {
+                    val ni = interfaces.nextElement()
+                    if (ni.name == "tun0") {
+                        foundTun = true
+                        val addrs = ni.inetAddresses.toList()
+                        tunAddr = addrs.joinToString { it.hostAddress }
+                        break
+                    }
+                }
+                if (foundTun) {
+                    LogManager.addLog("[DIAG] ✅ tun0 found with IP: $tunAddr")
+                } else {
+                    LogManager.addLog("[DIAG] ❌ tun0 NOT found – hev may have failed to create interface")
+                }
+            } catch (e: Exception) {
+                LogManager.addLog("[DIAG] ❌ Cannot list interfaces: ${e.message}")
             }
 
             LogManager.addLog("VPN and SOCKS5 tunnel ready (hev manages routing)")
@@ -366,8 +441,8 @@ class CustomVpnService : VpnService() {
 
     /**
      * Generate tproxy.conf.
-     * CRITICAL: use address: '127.0.0.1' so the tunnel can reach the proxy via loopback.
-     * mapdns removed for now to avoid DNS complications.
+     * We use '127.0.0.1' so the tunnel can reach the proxy via loopback.
+     * mapdns removed to avoid DNS complications.
      */
     private fun createTProxyConfig(socksPort: Int, mtu: Int): String? {
         return try {
