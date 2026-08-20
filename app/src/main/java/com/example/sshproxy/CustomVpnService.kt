@@ -15,7 +15,6 @@ import com.example.sshproxy.payload.PayloadProcessor
 import com.example.sshproxy.proxy.ConnectionStrategy
 import com.example.sshproxy.proxy.ProxyConnectionException
 import hev.sockstun.TProxyService
-import com.jcraft.jsch.ChannelDirectTCPIP
 import com.jcraft.jsch.JSch
 import com.jcraft.jsch.JSchException
 import com.jcraft.jsch.Session
@@ -23,11 +22,8 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import java.io.BufferedReader
 import java.io.File
 import java.io.FileOutputStream
-import java.io.InputStreamReader
-import java.net.InetSocketAddress
 import java.net.NetworkInterface
 import java.net.Socket
 import java.net.SocketTimeoutException
@@ -246,9 +242,8 @@ class CustomVpnService : VpnService() {
 
         establishSSH(compressionFailed)
 
-        // ========== DIAGNOSTIC TEST DISABLED (causes channel contention) ==========
-        // testDirectTcpipChannel()  // <-- COMMENTED OUT
-        // delay(3000)               // <-- COMMENTED OUT
+        // Give the SSH server time to settle before opening channels
+        delay(2000)
 
         isConnected.set(true)
         _state.value = VpnState.CONNECTED
@@ -297,31 +292,9 @@ class CustomVpnService : VpnService() {
     }
 
     /**
-     * Diagnostic test (kept for reference but disabled by default).
-     * Uncomment the calls in doConnect() to re-enable.
+     * Sets up the VPN interface, SOCKS5 proxy, and starts the hev-socks5-tunnel.
+     * Uses 10.0.0.1 as the proxy address (VPN gateway) and excludes it from the VPN route.
      */
-    @Suppress("unused")
-    private fun testDirectTcpipChannel() {
-        try {
-            val session = sshSession ?: return
-            LogManager.addLog("[DIAG] Testing direct-tcpip channel to 1.1.1.1:80...")
-            val channel = session.openChannel("direct-tcpip") as ChannelDirectTCPIP
-            channel.setHost("1.1.1.1")
-            channel.setPort(80)
-            channel.connect(5000)
-            LogManager.addLog("[DIAG] ✅ Direct-tcpip channel SUCCESS")
-            channel.disconnect()
-            Thread.sleep(200)
-        } catch (e: JSchException) {
-            LogManager.addLog("[DIAG] ❌ Direct-tcpip channel FAILED: ${e.message}")
-            if (e.message?.contains("invalid channel") == true) {
-                LogManager.addLog("[DIAG] → The server likely has AllowTcpForwarding disabled.")
-            }
-        } catch (e: Exception) {
-            LogManager.addLog("[DIAG] ❌ Direct-tcpip channel error: ${e.message}")
-        }
-    }
-
     private fun setupVpn() {
         if (tunnelSocket == null || tunnelSocket!!.isClosed) {
             LogManager.addLog("[ERROR] Tunnel socket is closed before VPN setup")
@@ -329,10 +302,12 @@ class CustomVpnService : VpnService() {
         }
 
         try {
-            // Create TUN interface with the same IP as hev config
+            // Create TUN interface with IP 10.0.0.2/24
+            // Add explicit exclude route for 10.0.0.1 to avoid routing loop
             vpnInterface = Builder()
-                .addAddress("10.0.0.2", 24)   // match hev config
-                .addRoute("0.0.0.0", 0)       // default route
+                .addAddress("10.0.0.2", 24)
+                .addRoute("0.0.0.0", 0)
+                .addRoute("10.0.0.1", 32)   // Exclude proxy IP from VPN
                 .setMtu(mtu)
                 .establish()
 
@@ -345,64 +320,18 @@ class CustomVpnService : VpnService() {
             LogManager.addLog("VPN interface created successfully (IP: 10.0.0.2/24)")
             Thread.sleep(500)
 
-            // Start SOCKS5 proxy - bind to all interfaces so it's reachable via loopback
+            // Start SOCKS5 proxy – bind to the VPN gateway IP (10.0.0.1)
             try {
                 val proxy = LocalSocks5Proxy(sshSession!!)
-                socksPort = proxy.start("0.0.0.0")   // bind to all interfaces
+                socksPort = proxy.start("10.0.0.1")   // bind to gateway
                 socksProxy = proxy
-                LogManager.addLog("[SOCKS5] Proxy running on 0.0.0.0:$socksPort")
+                LogManager.addLog("[SOCKS5] Proxy running on 10.0.0.1:$socksPort")
             } catch (e: Exception) {
                 LogManager.addLog("[ERROR] SOCKS5 proxy failed: ${e.message}")
                 throw e
             }
 
-            // ========================= DIAGNOSTIC 1: Proxy reachability =========================
-            try {
-                val testSocket = Socket()
-                testSocket.connect(InetSocketAddress("127.0.0.1", socksPort), 2000)
-                LogManager.addLog("[DIAG] ✅ Proxy reachable at 127.0.0.1:$socksPort")
-                testSocket.close()
-            } catch (e: Exception) {
-                LogManager.addLog("[DIAG] ❌ Proxy NOT reachable at 127.0.0.1:$socksPort – ${e.message}")
-            }
-
-            // ========================= DIAGNOSTIC 2: End-to-end test via proxy =========================
-            try {
-                val sock = Socket("127.0.0.1", socksPort)
-                val out = sock.getOutputStream()
-                val inp = sock.getInputStream()
-
-                // SOCKS5 handshake
-                out.write(byteArrayOf(0x05, 0x01, 0x00))
-                out.flush()
-                val resp = ByteArray(2)
-                inp.read(resp)
-                if (resp[0] == 0x05.toByte() && resp[1] == 0x00.toByte()) {
-                    // CONNECT to 1.1.1.1:80
-                    out.write(byteArrayOf(0x05, 0x01, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x50))
-                    out.flush()
-                    val bind = ByteArray(10)
-                    inp.read(bind)
-                    if (bind[1] == 0x00.toByte()) {
-                        // Send HTTP GET
-                        val request = "GET / HTTP/1.1\r\nHost: 1.1.1.1\r\nConnection: close\r\n\r\n"
-                        out.write(request.toByteArray())
-                        out.flush()
-                        val reader = BufferedReader(InputStreamReader(inp))
-                        val status = reader.readLine()
-                        LogManager.addLog("[DIAG] ✅ HTTP through proxy: $status")
-                    } else {
-                        LogManager.addLog("[DIAG] ❌ SOCKS CONNECT failed (bind response ${bind[1]})")
-                    }
-                } else {
-                    LogManager.addLog("[DIAG] ❌ SOCKS handshake failed (resp: ${resp.joinToString()})")
-                }
-                sock.close()
-            } catch (e: Exception) {
-                LogManager.addLog("[DIAG] ❌ Proxy test error: ${e.message}")
-            }
-
-            // Write YAML config
+            // Write YAML config – use 10.0.0.1 as the SOCKS5 address
             val configPath = createTProxyConfig(socksPort, mtu)
             if (configPath == null) {
                 LogManager.addLog("[ERROR] Failed to create tproxy config")
@@ -411,13 +340,11 @@ class CustomVpnService : VpnService() {
             }
             LogManager.addLog("[tproxy] Config written to $configPath")
 
-            // Log config content for debugging
+            // (Optional) log config content for debugging
             try {
                 val configContent = File(configPath).readText()
                 LogManager.addLog("[tproxy] Config content:\n$configContent")
-            } catch (e: Exception) {
-                // ignore
-            }
+            } catch (_: Exception) {}
 
             // Start hev
             val tunFd = vpnInterface!!.fd
@@ -427,38 +354,24 @@ class CustomVpnService : VpnService() {
                 LogManager.addLog("[hev-socks5-tunnel] Started successfully")
             } catch (e: UnsatisfiedLinkError) {
                 LogManager.addLog("[ERROR] Native library not loaded: ${e.message}")
-                LogManager.addLog("[DIAG] ❌ Native library load FAILED")
                 throw e
             } catch (e: Exception) {
                 LogManager.addLog("[ERROR] hev-socks5-tunnel exception: ${e.message}")
-                LogManager.addLog("[DIAG] ❌ hev start exception: ${e.message}")
                 throw e
             }
 
-            // ========================= DIAGNOSTIC 3: Check if tun0 exists =========================
+            // Verify tun0 exists (optional)
             try {
                 val interfaces = NetworkInterface.getNetworkInterfaces()
                 var foundTun = false
-                var tunAddr = ""
                 while (interfaces.hasMoreElements()) {
-                    val ni = interfaces.nextElement()
-                    if (ni.name == "tun0") {
+                    if (interfaces.nextElement().name == "tun0") {
                         foundTun = true
-                        val addrs = ni.inetAddresses.toList()
-                        tunAddr = addrs.joinToString(separator = ", ") { addr ->
-                            addr.hostAddress ?: "?"
-                        }
                         break
                     }
                 }
-                if (foundTun) {
-                    LogManager.addLog("[DIAG] ✅ tun0 found with IP: $tunAddr")
-                } else {
-                    LogManager.addLog("[DIAG] ❌ tun0 NOT found – hev may have failed to create interface")
-                }
-            } catch (e: Exception) {
-                LogManager.addLog("[DIAG] ❌ Cannot list interfaces: ${e.message}")
-            }
+                LogManager.addLog(if (foundTun) "[DIAG] ✅ tun0 found" else "[DIAG] ❌ tun0 NOT found")
+            } catch (_: Exception) {}
 
             LogManager.addLog("VPN and SOCKS5 tunnel ready (hev manages routing)")
 
@@ -473,9 +386,7 @@ class CustomVpnService : VpnService() {
     }
 
     /**
-     * Generate tproxy.conf.
-     * CRITICAL: use address: '127.0.0.1' so the tunnel can reach the proxy via loopback.
-     * mapdns removed for now to avoid DNS complications.
+     * Generate tproxy.conf – uses 10.0.0.1 as the SOCKS5 address (VPN gateway).
      */
     private fun createTProxyConfig(socksPort: Int, mtu: Int): String? {
         return try {
@@ -496,7 +407,7 @@ class CustomVpnService : VpnService() {
                         - "0.0.0.0/0"
                     socks5:
                       port: $socksPort
-                      address: '127.0.0.1'
+                      address: '10.0.0.1'
                       udp: 'udp'
                 """.trimIndent()
                 fos.write(config.toByteArray())
