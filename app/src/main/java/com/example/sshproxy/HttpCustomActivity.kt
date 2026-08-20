@@ -10,6 +10,8 @@ import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import androidx.viewpager2.widget.ViewPager2
 import com.google.android.material.tabs.TabLayout
 import com.google.android.material.tabs.TabLayoutMediator
+import java.io.File
+import java.util.Date
 
 class HttpCustomActivity : AppCompatActivity() {
 
@@ -27,13 +29,25 @@ class HttpCustomActivity : AppCompatActivity() {
             }
             val configFragment = supportFragmentManager.findFragmentByTag("f0") as? ConfigFragment
             configFragment?.updateStatus(status, color)
-            // No need to set disconnect button state – it's a single toggle managed by ConfigFragment itself
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_http_custom)
+
+        // ========== CRASH HANDLER ==========
+        // Writes any uncaught exception to a file in internal storage.
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            try {
+                val crashFile = File(filesDir, "crash.log")
+                crashFile.appendText("${Date()}\n${throwable.stackTraceToString()}\n\n")
+            } catch (_: Exception) {
+                // If we can't write the file, at least let the system handle it
+            }
+            // Re-throw to the default system handler (which will show the crash dialog)
+            Thread.getDefaultUncaughtExceptionHandler()?.uncaughtException(thread, throwable)
+        }
 
         viewPager = findViewById(R.id.viewPager)
         tabLayout = findViewById(R.id.tabLayout)
