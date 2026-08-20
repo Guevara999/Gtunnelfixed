@@ -9,17 +9,24 @@ import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketException
+import java.util.concurrent.Executors
+import java.util.concurrent.Semaphore
+import java.util.concurrent.TimeUnit
 
 class LocalSocks5Proxy(private val sshSession: Session) {
     private var serverSocket: ServerSocket? = null
     private var isRunning = false
     private var port = 0
 
+    // Limit concurrent connections to prevent thread explosion
+    private val connectionSemaphore = Semaphore(8)
+    private val executor = Executors.newFixedThreadPool(8)
+
     fun start(bindAddress: String = "0.0.0.0"): Int {
         serverSocket = ServerSocket(0, 50, InetAddress.getByName(bindAddress))
         port = serverSocket!!.localPort
         isRunning = true
-        LogManager.addLog("[SOCKS5] Proxy started on $bindAddress:$port")
+        LogManager.addLog("[SOCKS5] Proxy started on $bindAddress:$port (max 8 concurrent)")
         Thread { acceptLoop() }.start()
         return port
     }
@@ -28,7 +35,17 @@ class LocalSocks5Proxy(private val sshSession: Session) {
         while (isRunning) {
             try {
                 val client = serverSocket!!.accept()
-                Thread { handleClient(client) }.start()
+                // Submit to thread pool with semaphore
+                executor.submit {
+                    try {
+                        connectionSemaphore.acquire()
+                        handleClient(client)
+                    } catch (e: InterruptedException) {
+                        // ignore
+                    } finally {
+                        connectionSemaphore.release()
+                    }
+                }
             } catch (e: Exception) {
                 if (isRunning) {
                     LogManager.addLog("[SOCKS5] Accept error: ${e.message}")
@@ -57,7 +74,7 @@ class LocalSocks5Proxy(private val sshSession: Session) {
             output.flush()
             LogManager.addLog("[SOCKS5-DBG] Handshake response sent")
 
-            // ---- Parse SOCKS5 request (correctly) ----
+            // ---- Parse SOCKS5 request ----
             val ver = input.read()
             if (ver != 0x05) {
                 LogManager.addLog("[SOCKS5-DBG] Invalid request VER: $ver")
@@ -105,8 +122,8 @@ class LocalSocks5Proxy(private val sshSession: Session) {
                 val channel = sshSession.openChannel("direct-tcpip") as ChannelDirectTCPIP
                 channel.setHost(destHost)
                 channel.setPort(destPort)
-                LogManager.addLog("[SOCKS5-DBG] Channel configured, connecting with 15s timeout...")
-                channel.connect(15000)   // ← timeout added
+                LogManager.addLog("[SOCKS5-DBG] Channel configured, connecting with 30s timeout...")
+                channel.connect(30000) // 30 second timeout
                 LogManager.addLog("[SOCKS5-DBG] Channel connected successfully")
 
                 // Send success response
@@ -120,9 +137,12 @@ class LocalSocks5Proxy(private val sshSession: Session) {
                 val channelInput = channel.getInputStream()
                 val channelOutput = channel.getOutputStream()
 
+                // Use a thread pool for relay threads? We'll just start them as we did,
+                // but they are limited by the connection semaphore.
                 relay(clientInput, channelOutput, "client->ssh")
                 relay(channelInput, clientOutput, "ssh->client")
 
+                // Wait for threads to finish
                 clientInput.close()
                 channel.disconnect()
                 client.close()
@@ -130,23 +150,18 @@ class LocalSocks5Proxy(private val sshSession: Session) {
 
             } catch (e: JSchException) {
                 LogManager.addLog("[SOCKS5-DBG] ❌ JSchException: ${e.message}")
-                LogManager.addLog("[SOCKS5-DBG] Stack trace: ${e.stackTrace.joinToString("\n")}")
-                // Send error response (0x05, 0x01 = general failure)
+                // Send error response
                 output.write(byteArrayOf(0x05, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00))
                 output.flush()
                 client.close()
-                return
             } catch (e: Exception) {
                 LogManager.addLog("[SOCKS5-DBG] ❌ Exception: ${e.message}")
-                LogManager.addLog("[SOCKS5-DBG] Stack trace: ${e.stackTrace.joinToString("\n")}")
                 client.close()
-                return
             }
 
         } catch (e: Exception) {
             if (!(e is SocketException && e.message?.contains("Socket closed") == true)) {
                 LogManager.addLog("[SOCKS5] Error in handleClient: ${e.message}")
-                LogManager.addLog("[SOCKS5] Stack trace: ${e.stackTrace.joinToString("\n")}")
             }
             try { client.close() } catch (_: Exception) {}
         }
@@ -170,6 +185,7 @@ class LocalSocks5Proxy(private val sshSession: Session) {
 
     fun stop() {
         isRunning = false
+        executor.shutdownNow()
         try {
             serverSocket?.close()
         } catch (_: Exception) {}
