@@ -1,6 +1,7 @@
 package com.example.sshproxy
 
 import com.jcraft.jsch.ChannelDirectTCPIP
+import com.jcraft.jsch.JSchException
 import com.jcraft.jsch.Session
 import java.io.InputStream
 import java.io.OutputStream
@@ -41,25 +42,31 @@ class LocalSocks5Proxy(private val sshSession: Session) {
             val input = client.getInputStream()
             val output = client.getOutputStream()
 
-            // SOCKS5 handshake (no authentication)
+            // ---- SOCKS5 handshake ----
+            LogManager.addLog("[SOCKS5-DBG] Reading handshake...")
             val version = input.read()
             if (version != 0x05) {
+                LogManager.addLog("[SOCKS5-DBG] Invalid SOCKS version: $version")
                 client.close()
                 return
             }
             val nmethods = input.read()
+            LogManager.addLog("[SOCKS5-DBG] nmethods = $nmethods")
             repeat(nmethods) { input.read() }
             output.write(byteArrayOf(0x05, 0x00))
             output.flush()
+            LogManager.addLog("[SOCKS5-DBG] Handshake response sent")
 
-            // Parse CONNECT request
+            // ---- Parse CONNECT request ----
             val cmd = input.read()
-            if (cmd != 0x01) { // CONNECT only
+            if (cmd != 0x01) {
+                LogManager.addLog("[SOCKS5-DBG] Unsupported command: $cmd (only CONNECT supported)")
                 client.close()
                 return
             }
             input.read() // RSV
             val addrType = input.read()
+            LogManager.addLog("[SOCKS5-DBG] Address type: $addrType")
             val destHost = when (addrType) {
                 0x01 -> { // IPv4
                     val ip = ByteArray(4)
@@ -72,48 +79,71 @@ class LocalSocks5Proxy(private val sshSession: Session) {
                     input.read(domain)
                     String(domain)
                 }
-                0x04 -> { // IPv6 (skip)
+                0x04 -> { // IPv6 (simplified)
                     val ip = ByteArray(16)
                     input.read(ip)
                     "::1"
                 }
                 else -> {
+                    LogManager.addLog("[SOCKS5-DBG] Unsupported address type: $addrType")
                     client.close()
                     return
                 }
             }
             val destPort = (input.read() shl 8) or input.read()
+            LogManager.addLog("[SOCKS5-DBG] CONNECT to $destHost:$destPort")
 
-            LogManager.addLog("[SOCKS5] Connecting to $destHost:$destPort")
+            // ---- Open SSH direct-tcpip channel ----
+            try {
+                LogManager.addLog("[SOCKS5-DBG] Opening direct-tcpip channel...")
+                val channel = sshSession.openChannel("direct-tcpip") as ChannelDirectTCPIP
+                channel.setHost(destHost)
+                channel.setPort(destPort)
+                LogManager.addLog("[SOCKS5-DBG] Channel configured, connecting...")
+                channel.connect()
+                LogManager.addLog("[SOCKS5-DBG] Channel connected successfully")
 
-            // Open SSH direct-tcpip channel
-            val channel = sshSession.openChannel("direct-tcpip") as ChannelDirectTCPIP
-            channel.setHost(destHost)
-            channel.setPort(destPort)
-            channel.connect()
+                // Send success response
+                output.write(byteArrayOf(0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00))
+                output.flush()
+                LogManager.addLog("[SOCKS5-DBG] Success response sent")
 
-            // Send success response (BND.ADDR = 0.0.0.0:0)
-            output.write(byteArrayOf(0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00))
-            output.flush()
+                // Relay data
+                val clientInput = client.getInputStream()
+                val clientOutput = client.getOutputStream()
+                val channelInput = channel.getInputStream()
+                val channelOutput = channel.getOutputStream()
 
-            // Relay data bidirectionally
-            val clientInput = client.getInputStream()
-            val clientOutput = client.getOutputStream()
-            val channelInput = channel.getInputStream()
-            val channelOutput = channel.getOutputStream()
+                relay(clientInput, channelOutput, "client->ssh")
+                relay(channelInput, clientOutput, "ssh->client")
 
-            relay(clientInput, channelOutput, "client->ssh")
-            relay(channelInput, clientOutput, "ssh->client")
+                // Wait for threads to finish
+                clientInput.close()
+                channel.disconnect()
+                client.close()
+                LogManager.addLog("[SOCKS5-DBG] Relay complete for $destHost:$destPort")
 
-            // Wait for threads to finish
-            clientInput.close()
-            channel.disconnect()
-            client.close()
+            } catch (e: JSchException) {
+                LogManager.addLog("[SOCKS5-DBG] ❌ JSchException: ${e.message}")
+                LogManager.addLog("[SOCKS5-DBG] Stack trace: ${e.stackTrace.joinToString("\n")}")
+                // Send error response (0x05, 0x01 = general failure)
+                output.write(byteArrayOf(0x05, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00))
+                output.flush()
+                client.close()
+                return
+            } catch (e: Exception) {
+                LogManager.addLog("[SOCKS5-DBG] ❌ Exception: ${e.message}")
+                LogManager.addLog("[SOCKS5-DBG] Stack trace: ${e.stackTrace.joinToString("\n")}")
+                client.close()
+                return
+            }
 
         } catch (e: Exception) {
             if (!(e is SocketException && e.message?.contains("Socket closed") == true)) {
-                LogManager.addLog("[SOCKS5] Error: ${e.message}")
+                LogManager.addLog("[SOCKS5] Error in handleClient: ${e.message}")
+                LogManager.addLog("[SOCKS5] Stack trace: ${e.stackTrace.joinToString("\n")}")
             }
+            try { client.close() } catch (_: Exception) {}
         }
     }
 
