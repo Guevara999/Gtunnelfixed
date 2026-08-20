@@ -4,7 +4,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
-import android.net.NetworkInterface
+import android.net.NetworkInterface          // <-- ADD THIS IMPORT
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
@@ -413,8 +413,9 @@ class CustomVpnService : VpnService() {
                     val ni = interfaces.nextElement()
                     if (ni.name == "tun0") {
                         foundTun = true
+                        // Get addresses manually to avoid lambda issues
                         val addrs = ni.inetAddresses.toList()
-                        tunAddr = addrs.joinToString { it.hostAddress }
+                        tunAddr = addrs.joinToString(separator = ", ") { addr -> addr.hostAddress ?: "?" }
                         break
                     }
                 }
