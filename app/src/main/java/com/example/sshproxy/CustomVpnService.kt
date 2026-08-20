@@ -242,8 +242,8 @@ class CustomVpnService : VpnService() {
 
         establishSSH(compressionFailed)
 
-        // Give the SSH server time to settle before opening channels
-        delay(2000)
+        // Give the SSH server time to settle before opening channels (increased to 5 sec)
+        delay(5000)
 
         isConnected.set(true)
         _state.value = VpnState.CONNECTED
@@ -286,6 +286,23 @@ class CustomVpnService : VpnService() {
         if (session.isConnected) {
             sshSession = session
             LogManager.addLog("SSH authenticated")
+
+            // --- Start keep‑alive coroutine ---
+            CoroutineScope(Dispatchers.IO).launch {
+                while (isConnected.get() && sshSession?.isConnected == true) {
+                    delay(10000) // every 10 seconds
+                    try {
+                        sshSession?.sendKeepAlive()
+                        LogManager.addLog("[KEEPALIVE] sent")
+                    } catch (e: Exception) {
+                        LogManager.addLog("[KEEPALIVE] failed: ${e.message}")
+                        if (isConnected.get()) {
+                            isConnected.set(false)
+                            reconnect()
+                        }
+                    }
+                }
+            }
         } else {
             throw JSchException("SSH connection failed")
         }
@@ -385,14 +402,21 @@ class CustomVpnService : VpnService() {
 
     /**
      * Generate tproxy.conf – uses 10.0.0.2 as the SOCKS5 address (TUN interface IP).
-     * The log file is placed in the app's internal directory.
+     * The log file is placed in external storage so you can access it without root.
      */
     private fun createTProxyConfig(socksPort: Int, mtu: Int): String? {
         return try {
             val configFile = File(filesDir, "tproxy.conf")
             configFile.createNewFile()
             FileOutputStream(configFile).use { fos ->
-                val logFile = File(filesDir, "hev.log")
+                // Write log to external storage (accessible via file manager)
+                val externalDir = getExternalFilesDir(null)
+                val logFile = if (externalDir != null) {
+                    File(externalDir, "hev.log")
+                } else {
+                    // Fallback to internal storage if external is not available
+                    File(filesDir, "hev.log")
+                }
                 val config = """
                     misc:
                       task-stack-size: 65536
