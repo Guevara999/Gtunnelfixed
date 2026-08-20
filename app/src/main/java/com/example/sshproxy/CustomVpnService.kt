@@ -214,7 +214,6 @@ class CustomVpnService : VpnService() {
     }
 
     private suspend fun doConnect(compressionFailed: Boolean) {
-        LogManager.addLog("[DIAG] doConnect() STARTED")
         val strategy = ConnectionStrategy()
         val socket = try {
             strategy.establishTunnel(
@@ -297,7 +296,6 @@ class CustomVpnService : VpnService() {
      * Binds proxy to 0.0.0.0 and uses 10.0.0.2 as the SOCKS5 address in the config.
      */
     private fun setupVpn() {
-        LogManager.addLog("[DIAG] setupVpn() STARTED")
         if (tunnelSocket == null || tunnelSocket!!.isClosed) {
             LogManager.addLog("[ERROR] Tunnel socket is closed before VPN setup")
             return
@@ -388,7 +386,7 @@ class CustomVpnService : VpnService() {
     /**
      * Generate tproxy.conf – uses 10.0.0.2 as the SOCKS5 address (TUN interface IP).
      * The log file is placed in external storage (accessible without root).
-     * Also adds a limit section to reduce concurrency.
+     * Also adds a limit section to reduce concurrency to 1 (to avoid MaxSessions).
      */
     private fun createTProxyConfig(socksPort: Int, mtu: Int): String? {
         return try {
@@ -409,7 +407,7 @@ class CustomVpnService : VpnService() {
                       log-file: ${logFile.absolutePath}
                       log-level: debug
                       limit:
-                        max-sessions: 4
+                        max-sessions: 1
                         max-files: 1024
                     tunnel:
                       name: tun0
