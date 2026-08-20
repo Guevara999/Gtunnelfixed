@@ -57,7 +57,14 @@ class LocalSocks5Proxy(private val sshSession: Session) {
             output.flush()
             LogManager.addLog("[SOCKS5-DBG] Handshake response sent")
 
-            // ---- Parse CONNECT request ----
+            // ---- Parse SOCKS5 request (correctly) ----
+            // The request starts with VER, CMD, RSV, ATYP, ...
+            val ver = input.read()
+            if (ver != 0x05) {
+                LogManager.addLog("[SOCKS5-DBG] Invalid request VER: $ver")
+                client.close()
+                return
+            }
             val cmd = input.read()
             if (cmd != 0x01) {
                 LogManager.addLog("[SOCKS5-DBG] Unsupported command: $cmd (only CONNECT supported)")
@@ -103,7 +110,7 @@ class LocalSocks5Proxy(private val sshSession: Session) {
                 channel.connect()
                 LogManager.addLog("[SOCKS5-DBG] Channel connected successfully")
 
-                // Send success response
+                // Send success response (BND.ADDR = 0.0.0.0:0)
                 output.write(byteArrayOf(0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00))
                 output.flush()
                 LogManager.addLog("[SOCKS5-DBG] Success response sent")
