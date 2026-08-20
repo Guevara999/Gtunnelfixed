@@ -246,9 +246,9 @@ class CustomVpnService : VpnService() {
 
         establishSSH(compressionFailed)
 
-        // ========== DIAGNOSTIC: Test direct-tcpip channel ==========
+        // ========== DIAGNOSTIC: Test direct-tcpip channel with clean up ==========
         testDirectTcpipChannel()
-        delay(1000)  // ← Give the session time to settle after the test
+        delay(3000)  // Wait for server to release the test channel
 
         isConnected.set(true)
         _state.value = VpnState.CONNECTED
@@ -299,6 +299,7 @@ class CustomVpnService : VpnService() {
     /**
      * Diagnostic: test if direct-tcpip channel can be opened.
      * If this fails, the SSH server likely disables TCP forwarding.
+     * After test, wait a bit for the channel to be fully closed.
      */
     private fun testDirectTcpipChannel() {
         try {
@@ -310,6 +311,8 @@ class CustomVpnService : VpnService() {
             channel.connect(5000)
             LogManager.addLog("[DIAG] ✅ Direct-tcpip channel SUCCESS")
             channel.disconnect()
+            // Give the server time to close the channel
+            Thread.sleep(200)
         } catch (e: JSchException) {
             LogManager.addLog("[DIAG] ❌ Direct-tcpip channel FAILED: ${e.message}")
             if (e.message?.contains("invalid channel") == true) {
