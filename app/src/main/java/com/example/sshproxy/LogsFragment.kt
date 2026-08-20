@@ -37,7 +37,6 @@ class LogsFragment : Fragment() {
             copyFab?.setOnClickListener { copyLogs() }
             shareFab?.setOnClickListener { shareLogs() }
         } catch (e: Exception) {
-            // If FABs are missing, just ignore – the text view still works
             e.printStackTrace()
         }
 
@@ -46,7 +45,6 @@ class LogsFragment : Fragment() {
             true
         }
 
-        // Start a coroutine that updates the log view every 500ms
         lifecycleScope.launch {
             while (true) {
                 val combinedLogs = buildCombinedLogs()
@@ -60,17 +58,12 @@ class LogsFragment : Fragment() {
 
     override fun onResume() {
         super.onResume()
-        // Update immediately on resume (in a coroutine)
         lifecycleScope.launch {
             val combinedLogs = buildCombinedLogs()
             logText.text = combinedLogs
         }
     }
 
-    /**
-     * Builds a combined log string from the app's in‑memory logs and the hev log file.
-     * This is a suspend function to allow reading the file on a background thread.
-     */
     private suspend fun buildCombinedLogs(): String {
         return withContext(Dispatchers.IO) {
             val appLogs = LogManager.getLogs().joinToString("\n")
@@ -80,17 +73,19 @@ class LogsFragment : Fragment() {
         }
     }
 
-    /**
-     * Reads the hev log file from the app's internal storage.
-     * Returns an empty string if the file doesn't exist or can't be read.
-     */
     private suspend fun readHevLog(): String = withContext(Dispatchers.IO) {
         try {
-            val hevLogFile = File(requireContext().filesDir, "hev.log")
+            // Try external storage first
+            val externalDir = requireContext().getExternalFilesDir(null)
+            val hevLogFile = if (externalDir != null) {
+                File(externalDir, "hev.log")
+            } else {
+                File(requireContext().filesDir, "hev.log")
+            }
             if (hevLogFile.exists()) {
                 hevLogFile.readText().takeIf { it.isNotBlank() } ?: "(empty)"
             } else {
-                "(hev.log not found)"
+                "(hev.log not found at ${hevLogFile.absolutePath})"
             }
         } catch (e: Exception) {
             "Error reading hev.log: ${e.message}"
