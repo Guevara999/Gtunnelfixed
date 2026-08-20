@@ -293,7 +293,7 @@ class CustomVpnService : VpnService() {
 
     /**
      * Sets up the VPN interface, SOCKS5 proxy, and starts the hev-socks5-tunnel.
-     * Uses 10.0.0.1 as the proxy address (VPN gateway) and excludes it from the VPN route.
+     * Binds proxy to 0.0.0.0 and uses 10.0.0.2 as the SOCKS5 address in the config.
      */
     private fun setupVpn() {
         if (tunnelSocket == null || tunnelSocket!!.isClosed) {
@@ -303,11 +303,9 @@ class CustomVpnService : VpnService() {
 
         try {
             // Create TUN interface with IP 10.0.0.2/24
-            // Add explicit exclude route for 10.0.0.1 to avoid routing loop
             vpnInterface = Builder()
                 .addAddress("10.0.0.2", 24)
                 .addRoute("0.0.0.0", 0)
-                .addRoute("10.0.0.1", 32)   // Exclude proxy IP from VPN
                 .setMtu(mtu)
                 .establish()
 
@@ -320,18 +318,18 @@ class CustomVpnService : VpnService() {
             LogManager.addLog("VPN interface created successfully (IP: 10.0.0.2/24)")
             Thread.sleep(500)
 
-            // Start SOCKS5 proxy – bind to the VPN gateway IP (10.0.0.1)
+            // Start SOCKS5 proxy – bind to all interfaces (0.0.0.0)
             try {
                 val proxy = LocalSocks5Proxy(sshSession!!)
-                socksPort = proxy.start("10.0.0.1")   // bind to gateway
+                socksPort = proxy.start("0.0.0.0")
                 socksProxy = proxy
-                LogManager.addLog("[SOCKS5] Proxy running on 10.0.0.1:$socksPort")
+                LogManager.addLog("[SOCKS5] Proxy running on 0.0.0.0:$socksPort")
             } catch (e: Exception) {
                 LogManager.addLog("[ERROR] SOCKS5 proxy failed: ${e.message}")
                 throw e
             }
 
-            // Write YAML config – use 10.0.0.1 as the SOCKS5 address
+            // Write YAML config – use 10.0.0.2 as the SOCKS5 address
             val configPath = createTProxyConfig(socksPort, mtu)
             if (configPath == null) {
                 LogManager.addLog("[ERROR] Failed to create tproxy config")
@@ -386,15 +384,14 @@ class CustomVpnService : VpnService() {
     }
 
     /**
-     * Generate tproxy.conf – uses 10.0.0.1 as the SOCKS5 address (VPN gateway).
-     * The log file is now placed in the app's internal directory so you can read it without root.
+     * Generate tproxy.conf – uses 10.0.0.2 as the SOCKS5 address (TUN interface IP).
+     * The log file is placed in the app's internal directory.
      */
     private fun createTProxyConfig(socksPort: Int, mtu: Int): String? {
         return try {
             val configFile = File(filesDir, "tproxy.conf")
             configFile.createNewFile()
             FileOutputStream(configFile).use { fos ->
-                // Place the log file inside the app's private directory
                 val logFile = File(filesDir, "hev.log")
                 val config = """
                     misc:
@@ -410,7 +407,7 @@ class CustomVpnService : VpnService() {
                         - "0.0.0.0/0"
                     socks5:
                       port: $socksPort
-                      address: '10.0.0.1'
+                      address: '10.0.0.2'
                       udp: 'udp'
                 """.trimIndent()
                 fos.write(config.toByteArray())
