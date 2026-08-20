@@ -248,6 +248,7 @@ class CustomVpnService : VpnService() {
 
         // ========== DIAGNOSTIC: Test direct-tcpip channel ==========
         testDirectTcpipChannel()
+        delay(1000)  // ← Give the session time to settle after the test
 
         isConnected.set(true)
         _state.value = VpnState.CONNECTED
