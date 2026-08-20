@@ -286,23 +286,7 @@ class CustomVpnService : VpnService() {
         if (session.isConnected) {
             sshSession = session
             LogManager.addLog("SSH authenticated")
-
-            // --- Start keep‑alive coroutine ---
-            CoroutineScope(Dispatchers.IO).launch {
-                while (isConnected.get() && sshSession?.isConnected == true) {
-                    delay(10000) // every 10 seconds
-                    try {
-                        sshSession?.sendKeepAlive()
-                        LogManager.addLog("[KEEPALIVE] sent")
-                    } catch (e: Exception) {
-                        LogManager.addLog("[KEEPALIVE] failed: ${e.message}")
-                        if (isConnected.get()) {
-                            isConnected.set(false)
-                            reconnect()
-                        }
-                    }
-                }
-            }
+            // Keep-alive is handled by ServerAliveInterval and TCPKeepAlive settings
         } else {
             throw JSchException("SSH connection failed")
         }
