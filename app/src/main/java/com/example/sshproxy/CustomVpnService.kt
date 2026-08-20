@@ -4,7 +4,6 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
-import android.net.NetworkInterface          // <-- ADD THIS IMPORT
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
@@ -28,6 +27,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStreamReader
 import java.net.InetSocketAddress
+import java.net.NetworkInterface
 import java.net.Socket
 import java.net.SocketTimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
@@ -325,7 +325,7 @@ class CustomVpnService : VpnService() {
                 throw e
             }
 
-            // ========== DIAGNOSTIC: Test proxy reachability ==========
+            // ========================= DIAGNOSTIC 1: Proxy reachability =========================
             try {
                 val testSocket = Socket()
                 testSocket.connect(InetSocketAddress("127.0.0.1", socksPort), 2000)
@@ -335,7 +335,7 @@ class CustomVpnService : VpnService() {
                 LogManager.addLog("[DIAG] ❌ Proxy NOT reachable at 127.0.0.1:$socksPort – ${e.message}")
             }
 
-            // ========== DIAGNOSTIC: Test end-to-end through proxy ==========
+            // ========================= DIAGNOSTIC 2: End-to-end test via proxy =========================
             try {
                 val sock = Socket("127.0.0.1", socksPort)
                 val out = sock.getOutputStream()
@@ -404,7 +404,7 @@ class CustomVpnService : VpnService() {
                 throw e
             }
 
-            // ========== DIAGNOSTIC: Check if tun0 exists ==========
+            // ========================= DIAGNOSTIC 3: Check if tun0 exists =========================
             try {
                 val interfaces = NetworkInterface.getNetworkInterfaces()
                 var foundTun = false
@@ -413,9 +413,10 @@ class CustomVpnService : VpnService() {
                     val ni = interfaces.nextElement()
                     if (ni.name == "tun0") {
                         foundTun = true
-                        // Get addresses manually to avoid lambda issues
                         val addrs = ni.inetAddresses.toList()
-                        tunAddr = addrs.joinToString(separator = ", ") { addr -> addr.hostAddress ?: "?" }
+                        tunAddr = addrs.joinToString(separator = ", ") { addr ->
+                            addr.hostAddress ?: "?"
+                        }
                         break
                     }
                 }
@@ -442,8 +443,8 @@ class CustomVpnService : VpnService() {
 
     /**
      * Generate tproxy.conf.
-     * We use '127.0.0.1' so the tunnel can reach the proxy via loopback.
-     * mapdns removed to avoid DNS complications.
+     * CRITICAL: use address: '127.0.0.1' so the tunnel can reach the proxy via loopback.
+     * mapdns removed for now to avoid DNS complications.
      */
     private fun createTProxyConfig(socksPort: Int, mtu: Int): String? {
         return try {
