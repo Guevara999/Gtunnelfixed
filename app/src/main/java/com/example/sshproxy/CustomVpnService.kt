@@ -214,6 +214,7 @@ class CustomVpnService : VpnService() {
     }
 
     private suspend fun doConnect(compressionFailed: Boolean) {
+        LogManager.addLog("[DIAG] doConnect() STARTED")
         val strategy = ConnectionStrategy()
         val socket = try {
             strategy.establishTunnel(
@@ -286,7 +287,6 @@ class CustomVpnService : VpnService() {
         if (session.isConnected) {
             sshSession = session
             LogManager.addLog("SSH authenticated")
-            // Keep-alive is handled by ServerAliveInterval and TCPKeepAlive settings
         } else {
             throw JSchException("SSH connection failed")
         }
@@ -297,6 +297,7 @@ class CustomVpnService : VpnService() {
      * Binds proxy to 0.0.0.0 and uses 10.0.0.2 as the SOCKS5 address in the config.
      */
     private fun setupVpn() {
+        LogManager.addLog("[DIAG] setupVpn() STARTED")
         if (tunnelSocket == null || tunnelSocket!!.isClosed) {
             LogManager.addLog("[ERROR] Tunnel socket is closed before VPN setup")
             return
@@ -386,19 +387,20 @@ class CustomVpnService : VpnService() {
 
     /**
      * Generate tproxy.conf – uses 10.0.0.2 as the SOCKS5 address (TUN interface IP).
-     * The log file is placed in external storage so you can access it without root.
+     * The log file is placed in external storage (accessible without root).
+     * Also adds a limit section to reduce concurrency.
      */
     private fun createTProxyConfig(socksPort: Int, mtu: Int): String? {
         return try {
             val configFile = File(filesDir, "tproxy.conf")
             configFile.createNewFile()
             FileOutputStream(configFile).use { fos ->
-                // Write log to external storage (accessible via file manager)
+                // Ensure log directory exists
                 val externalDir = getExternalFilesDir(null)
                 val logFile = if (externalDir != null) {
+                    externalDir.mkdirs()
                     File(externalDir, "hev.log")
                 } else {
-                    // Fallback to internal storage if external is not available
                     File(filesDir, "hev.log")
                 }
                 val config = """
@@ -406,6 +408,9 @@ class CustomVpnService : VpnService() {
                       task-stack-size: 65536
                       log-file: ${logFile.absolutePath}
                       log-level: debug
+                      limit:
+                        max-sessions: 4
+                        max-files: 1024
                     tunnel:
                       name: tun0
                       mtu: $mtu
