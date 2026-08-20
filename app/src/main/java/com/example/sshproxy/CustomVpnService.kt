@@ -246,9 +246,9 @@ class CustomVpnService : VpnService() {
 
         establishSSH(compressionFailed)
 
-        // ========== DIAGNOSTIC: Test direct-tcpip channel with clean up ==========
-        testDirectTcpipChannel()
-        delay(3000)  // Wait for server to release the test channel
+        // ========== DIAGNOSTIC TEST DISABLED (causes channel contention) ==========
+        // testDirectTcpipChannel()  // <-- COMMENTED OUT
+        // delay(3000)               // <-- COMMENTED OUT
 
         isConnected.set(true)
         _state.value = VpnState.CONNECTED
@@ -297,10 +297,10 @@ class CustomVpnService : VpnService() {
     }
 
     /**
-     * Diagnostic: test if direct-tcpip channel can be opened.
-     * If this fails, the SSH server likely disables TCP forwarding.
-     * After test, wait a bit for the channel to be fully closed.
+     * Diagnostic test (kept for reference but disabled by default).
+     * Uncomment the calls in doConnect() to re-enable.
      */
+    @Suppress("unused")
     private fun testDirectTcpipChannel() {
         try {
             val session = sshSession ?: return
@@ -311,7 +311,6 @@ class CustomVpnService : VpnService() {
             channel.connect(5000)
             LogManager.addLog("[DIAG] ✅ Direct-tcpip channel SUCCESS")
             channel.disconnect()
-            // Give the server time to close the channel
             Thread.sleep(200)
         } catch (e: JSchException) {
             LogManager.addLog("[DIAG] ❌ Direct-tcpip channel FAILED: ${e.message}")
