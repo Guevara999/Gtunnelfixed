@@ -15,6 +15,7 @@ import com.example.sshproxy.payload.PayloadProcessor
 import com.example.sshproxy.proxy.ConnectionStrategy
 import com.example.sshproxy.proxy.ProxyConnectionException
 import hev.sockstun.TProxyService
+import com.jcraft.jsch.ChannelDirectTCPIP
 import com.jcraft.jsch.JSch
 import com.jcraft.jsch.JSchException
 import com.jcraft.jsch.Session
@@ -245,6 +246,9 @@ class CustomVpnService : VpnService() {
 
         establishSSH(compressionFailed)
 
+        // ========== DIAGNOSTIC: Test direct-tcpip channel ==========
+        testDirectTcpipChannel()
+
         isConnected.set(true)
         _state.value = VpnState.CONNECTED
         reconnectAttempts = 0
@@ -288,6 +292,30 @@ class CustomVpnService : VpnService() {
             LogManager.addLog("SSH authenticated")
         } else {
             throw JSchException("SSH connection failed")
+        }
+    }
+
+    /**
+     * Diagnostic: test if direct-tcpip channel can be opened.
+     * If this fails, the SSH server likely disables TCP forwarding.
+     */
+    private fun testDirectTcpipChannel() {
+        try {
+            val session = sshSession ?: return
+            LogManager.addLog("[DIAG] Testing direct-tcpip channel to 1.1.1.1:80...")
+            val channel = session.openChannel("direct-tcpip") as ChannelDirectTCPIP
+            channel.setHost("1.1.1.1")
+            channel.setPort(80)
+            channel.connect(5000)
+            LogManager.addLog("[DIAG] ✅ Direct-tcpip channel SUCCESS")
+            channel.disconnect()
+        } catch (e: JSchException) {
+            LogManager.addLog("[DIAG] ❌ Direct-tcpip channel FAILED: ${e.message}")
+            if (e.message?.contains("invalid channel") == true) {
+                LogManager.addLog("[DIAG] → The server likely has AllowTcpForwarding disabled.")
+            }
+        } catch (e: Exception) {
+            LogManager.addLog("[DIAG] ❌ Direct-tcpip channel error: ${e.message}")
         }
     }
 
