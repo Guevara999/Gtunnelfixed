@@ -60,22 +60,23 @@ class LogsFragment : Fragment() {
 
     override fun onResume() {
         super.onResume()
-        // Update immediately on resume
-        val combinedLogs = buildCombinedLogs()
-        logText.text = combinedLogs
+        // Update immediately on resume (in a coroutine)
+        lifecycleScope.launch {
+            val combinedLogs = buildCombinedLogs()
+            logText.text = combinedLogs
+        }
     }
 
     /**
      * Builds a combined log string from the app's in‑memory logs and the hev log file.
+     * This is a suspend function to allow reading the file on a background thread.
      */
-    private fun buildCombinedLogs(): String {
-        return runCatching {
+    private suspend fun buildCombinedLogs(): String {
+        return withContext(Dispatchers.IO) {
             val appLogs = LogManager.getLogs().joinToString("\n")
             val hevLog = readHevLog()
             val separator = "\n\n--- HEV LOG (native tunnel) ---\n"
             appLogs + separator + hevLog
-        }.getOrElse {
-            "Error reading logs: ${it.message}"
         }
     }
 
