@@ -387,16 +387,19 @@ class CustomVpnService : VpnService() {
 
     /**
      * Generate tproxy.conf – uses 10.0.0.1 as the SOCKS5 address (VPN gateway).
+     * The log file is now placed in the app's internal directory so you can read it without root.
      */
     private fun createTProxyConfig(socksPort: Int, mtu: Int): String? {
         return try {
             val configFile = File(filesDir, "tproxy.conf")
             configFile.createNewFile()
             FileOutputStream(configFile).use { fos ->
+                // Place the log file inside the app's private directory
+                val logFile = File(filesDir, "hev.log")
                 val config = """
                     misc:
                       task-stack-size: 65536
-                      log-file: /data/local/tmp/hev.log
+                      log-file: ${logFile.absolutePath}
                       log-level: debug
                     tunnel:
                       name: tun0
