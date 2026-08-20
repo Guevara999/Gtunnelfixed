@@ -310,7 +310,7 @@ class CustomVpnService : VpnService() {
             LogManager.addLog("VPN interface created successfully (IP: 10.0.0.2/24)")
             Thread.sleep(500)
 
-            // Start SOCKS5 proxy - bind to all interfaces so it's reachable at 10.0.0.1
+            // Start SOCKS5 proxy - bind to all interfaces so it's reachable via loopback
             try {
                 val proxy = LocalSocks5Proxy(sshSession!!)
                 socksPort = proxy.start("0.0.0.0")   // bind to all interfaces
@@ -364,7 +364,11 @@ class CustomVpnService : VpnService() {
         }
     }
 
-    // ✅ FIXED: DNS over TCP to work with TCP-only SOCKS5 proxy
+    /**
+     * Generate tproxy.conf.
+     * CRITICAL: use address: '127.0.0.1' so the tunnel can reach the proxy via loopback.
+     * mapdns removed for now to avoid DNS complications.
+     */
     private fun createTProxyConfig(socksPort: Int, mtu: Int): String? {
         return try {
             val configFile = File(filesDir, "tproxy.conf")
@@ -384,14 +388,8 @@ class CustomVpnService : VpnService() {
                         - "0.0.0.0/0"
                     socks5:
                       port: $socksPort
-                      address: '10.0.0.1'
+                      address: '127.0.0.1'
                       udp: 'udp'
-                    mapdns:
-                      address: '1.1.1.1'
-                      port: 53
-                      network: 'tcp'       # ← CRITICAL FIX: use TCP for DNS
-                      netmask: 32
-                      cache-size: 256
                 """.trimIndent()
                 fos.write(config.toByteArray())
             }
