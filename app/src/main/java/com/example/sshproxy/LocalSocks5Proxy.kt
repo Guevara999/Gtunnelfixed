@@ -58,7 +58,6 @@ class LocalSocks5Proxy(private val sshSession: Session) {
             LogManager.addLog("[SOCKS5-DBG] Handshake response sent")
 
             // ---- Parse SOCKS5 request (correctly) ----
-            // The request starts with VER, CMD, RSV, ATYP, ...
             val ver = input.read()
             if (ver != 0x05) {
                 LogManager.addLog("[SOCKS5-DBG] Invalid request VER: $ver")
@@ -100,17 +99,17 @@ class LocalSocks5Proxy(private val sshSession: Session) {
             val destPort = (input.read() shl 8) or input.read()
             LogManager.addLog("[SOCKS5-DBG] CONNECT to $destHost:$destPort")
 
-            // ---- Open SSH direct-tcpip channel ----
+            // ---- Open SSH direct-tcpip channel with timeout ----
             try {
                 LogManager.addLog("[SOCKS5-DBG] Opening direct-tcpip channel...")
                 val channel = sshSession.openChannel("direct-tcpip") as ChannelDirectTCPIP
                 channel.setHost(destHost)
                 channel.setPort(destPort)
-                LogManager.addLog("[SOCKS5-DBG] Channel configured, connecting...")
-                channel.connect()
+                LogManager.addLog("[SOCKS5-DBG] Channel configured, connecting with 15s timeout...")
+                channel.connect(15000)   // ← timeout added
                 LogManager.addLog("[SOCKS5-DBG] Channel connected successfully")
 
-                // Send success response (BND.ADDR = 0.0.0.0:0)
+                // Send success response
                 output.write(byteArrayOf(0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00))
                 output.flush()
                 LogManager.addLog("[SOCKS5-DBG] Success response sent")
@@ -124,7 +123,6 @@ class LocalSocks5Proxy(private val sshSession: Session) {
                 relay(clientInput, channelOutput, "client->ssh")
                 relay(channelInput, clientOutput, "ssh->client")
 
-                // Wait for threads to finish
                 clientInput.close()
                 channel.disconnect()
                 client.close()
