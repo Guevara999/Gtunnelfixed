@@ -13,8 +13,11 @@ import android.widget.Toast
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.floatingactionbutton.FloatingActionButton
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 
 class LogsFragment : Fragment() {
 
@@ -43,10 +46,11 @@ class LogsFragment : Fragment() {
             true
         }
 
+        // Start a coroutine that updates the log view every 500ms
         lifecycleScope.launch {
             while (true) {
-                val logs = LogManager.getLogs()
-                logText.text = logs.joinToString("\n")
+                val combinedLogs = buildCombinedLogs()
+                logText.text = combinedLogs
                 delay(500)
             }
         }
@@ -56,8 +60,40 @@ class LogsFragment : Fragment() {
 
     override fun onResume() {
         super.onResume()
-        val logs = LogManager.getLogs()
-        logText.text = logs.joinToString("\n")
+        // Update immediately on resume
+        val combinedLogs = buildCombinedLogs()
+        logText.text = combinedLogs
+    }
+
+    /**
+     * Builds a combined log string from the app's in‑memory logs and the hev log file.
+     */
+    private fun buildCombinedLogs(): String {
+        return runCatching {
+            val appLogs = LogManager.getLogs().joinToString("\n")
+            val hevLog = readHevLog()
+            val separator = "\n\n--- HEV LOG (native tunnel) ---\n"
+            appLogs + separator + hevLog
+        }.getOrElse {
+            "Error reading logs: ${it.message}"
+        }
+    }
+
+    /**
+     * Reads the hev log file from the app's internal storage.
+     * Returns an empty string if the file doesn't exist or can't be read.
+     */
+    private suspend fun readHevLog(): String = withContext(Dispatchers.IO) {
+        try {
+            val hevLogFile = File(requireContext().filesDir, "hev.log")
+            if (hevLogFile.exists()) {
+                hevLogFile.readText().takeIf { it.isNotBlank() } ?: "(empty)"
+            } else {
+                "(hev.log not found)"
+            }
+        } catch (e: Exception) {
+            "Error reading hev.log: ${e.message}"
+        }
     }
 
     private fun copyLogs() {
