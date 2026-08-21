@@ -83,5 +83,7 @@ dependencies {
     kapt "androidx.room:room-compiler:$room_version"
 
     // ---------- Sing-box (libbox) via JitPack ----------
-    implementation 'com.github.singbox-android:libbox:1.13.11'
+    // Try one of these (remove the ones that don't work):
+    implementation 'com.github.SagerNet:libbox:1.13.11'   // official
+    // alternative: implementation 'com.github.singbox-android:libbox:1.13.11'
 }
