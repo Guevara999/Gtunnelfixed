@@ -76,12 +76,12 @@ dependencies {
     // ---------- JSON ----------
     implementation 'com.google.code.gson:gson:2.10.1'
 
-    // ---------- Room Database (for config) ----------
+    // ---------- Room Database ----------
     def room_version = "2.6.1"
     implementation "androidx.room:room-runtime:$room_version"
     implementation "androidx.room:room-ktx:$room_version"
     kapt "androidx.room:room-compiler:$room_version"
 
-    // ---------- Sing-box (replaces SSH + SOCKS + TUN) ----------
-    implementation 'io.github.sing-box:sing-box:1.9.0'   // latest version
+    // ---------- Sing-box (libbox) via JitPack ----------
+    implementation 'com.github.singbox-android:libbox:1.13.11'
 }
