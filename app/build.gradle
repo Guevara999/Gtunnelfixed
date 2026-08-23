@@ -82,7 +82,10 @@ dependencies {
     implementation "androidx.room:room-ktx:$room_version"
     kapt "androidx.room:room-compiler:$room_version"
 
-    // ---------- Sing-box (libbox) ----------
-    // The AAR is built during the workflow and placed in app/libs/
-    implementation files('libs/libbox.aar')
+    // ---------- SSH ----------
+    // Use the modern JSch fork that supports more ciphers
+    implementation 'com.github.mwiede:jsch:0.2.16'
+
+    // ---------- hev-socks5-tunnel ----------
+    // Keep your existing implementation (it's in the project)
 }
