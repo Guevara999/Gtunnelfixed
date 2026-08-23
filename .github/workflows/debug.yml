@@ -24,6 +24,11 @@ jobs:
           java-version: '17'
           cache: gradle
 
+      - name: Download libbox.aar
+        run: |
+          mkdir -p app/libs
+          wget -O app/libs/libbox.aar https://raw.githubusercontent.com/Leadaxe/LxBox/main/app/libs/libbox.aar
+
       - name: Make gradlew executable
         run: chmod +x gradlew
 
