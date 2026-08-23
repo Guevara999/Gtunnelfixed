@@ -41,7 +41,7 @@ class CustomVpnService : VpnService() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var pingJob: Job? = null
 
-    // Config
+    // Config variables
     private var sshHost: String = ""
     private var sshPort: String = ""
     private var sshUser: String = ""
