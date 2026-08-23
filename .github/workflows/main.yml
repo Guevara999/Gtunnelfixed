@@ -45,9 +45,10 @@ jobs:
           git clone https://github.com/SagerNet/sing-box.git
           cd sing-box
           export GOFLAGS="-tags=with_gvisor,with_quic,with_wireguard,with_clash_api,with_tailscale"
-          go run ./cmd/internal/build_libbox -target android -platform android/arm,android/arm64
+          go run ./cmd/internal/build_libbox -target android -platform android/arm64
           mkdir -p ../app/libs
-          cp libbox.aar ../app/libs/
+          # Use the legacy AAR to avoid cronet/naive_outbound linker errors
+          cp libbox-legacy.aar ../app/libs/libbox.aar
 
       - name: Make gradlew executable
         run: chmod +x gradlew
