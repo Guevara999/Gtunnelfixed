@@ -6,16 +6,14 @@ import android.content.Context
 import android.content.Intent
 import android.net.VpnService
 import android.os.Build
-import android.os.ParcelFileDescriptor
 import android.os.PowerManager
-import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
+import io.nekohasekai.libbox.LibboxCallback
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import io.github.sing_box.SingBox
 import java.util.concurrent.atomic.AtomicBoolean
 
 class CustomVpnService : VpnService() {
@@ -41,8 +39,9 @@ class CustomVpnService : VpnService() {
     private var singBoxManager: SingBoxManager? = null
     private val isConnected = AtomicBoolean(false)
     private var wakeLock: PowerManager.WakeLock? = null
+    private var pingJob: Job? = null
 
-    // --- Config (same as before) ---
+    // --- Config variables (set from Intent) ---
     private var sshHost: String = ""
     private var sshPort: String = ""
     private var sshUser: String = ""
@@ -50,22 +49,11 @@ class CustomVpnService : VpnService() {
     private var proxyHost: String = ""
     private var proxyPort: String = ""
     private var payload: String = ""
-    private var splitDelayMs: Int = 500
-    private var dnsPrimary: String = "1.1.1.1"
-    private var dnsSecondary: String = "1.0.0.1"
-    private var pingTarget: String = "1.1.1.1"
-    private var enableCompression: Boolean = true
-    private var alwaysReconnect: Boolean = false
-    private var followRedirects: Boolean = true
-    private var usePayload: Boolean = true
-    private var useSsl: Boolean = false
     private var mtu: Int = 1500
-    private var sendBuffer: Int = 16384
-    private var receiveBuffer: Int = 32768
     private var pingUrl: String = "https://dns.google"
     private var pingInterval: Int = 2000
     private var pingTimeout: Int = 10000
-    private var enhanced: Boolean = false
+    private var alwaysReconnect: Boolean = false
 
     override fun onCreate() {
         super.onCreate()
@@ -101,24 +89,11 @@ class CustomVpnService : VpnService() {
         proxyHost = intent.getStringExtra("proxyHost") ?: ""
         proxyPort = intent.getStringExtra("proxyPort") ?: ""
         payload = intent.getStringExtra("payload") ?: ""
-        splitDelayMs = intent.getIntExtra("splitDelay", 500)
-        dnsPrimary = intent.getStringExtra("dnsPrimary") ?: "1.1.1.1"
-        dnsSecondary = intent.getStringExtra("dnsSecondary") ?: "1.0.0.1"
-        pingTarget = intent.getStringExtra("pingTarget") ?: "1.1.1.1"
-        enableCompression = intent.getBooleanExtra("enableCompression", true)
-        alwaysReconnect = intent.getBooleanExtra("alwaysReconnect", false)
-        followRedirects = intent.getBooleanExtra("followRedirects", true)
-        usePayload = intent.getBooleanExtra("usePayload", true)
-        useSsl = intent.getBooleanExtra("proxySsl", false)
         mtu = intent.getIntExtra("mtu", 1500)
-        sendBuffer = intent.getIntExtra("sendBuffer", 16384)
-        receiveBuffer = intent.getIntExtra("receiveBuffer", 32768)
         pingUrl = intent.getStringExtra("pingUrl") ?: "https://dns.google"
         pingInterval = intent.getIntExtra("pingInterval", 2000)
         pingTimeout = intent.getIntExtra("pingTimeout", 10000)
-        enhanced = intent.getBooleanExtra("enhanced", false)
-        LogManager.addLog("[DEBUG] Payload received: ${payload.take(100)}...")
-        LogManager.addLog("[DEBUG] Enhanced mode: $enhanced")
+        alwaysReconnect = intent.getBooleanExtra("alwaysReconnect", false)
     }
 
     private fun connect() {
@@ -149,7 +124,6 @@ class CustomVpnService : VpnService() {
     }
 
     private suspend fun doConnect() {
-        // Build Sing-box config
         val config = singBoxManager!!.buildConfig(
             sshHost, sshPort.toInt(), sshUser, sshPass,
             proxyHost, proxyPort.toInt(), payload,
@@ -158,18 +132,15 @@ class CustomVpnService : VpnService() {
 
         LogManager.addLog("[Sing-box] Starting with config:\n$config")
 
-        // Start Sing-box
-        val success = singBoxManager!!.start(config, object : SingBox.Callback {
+        val success = singBoxManager!!.start(config, object : LibboxCallback {
             override fun onLog(level: Int, message: String) {
                 LogManager.addLog("[Sing-box] $message")
-                if (message.contains("SSH handshake") || message.contains("connected")) {
-                    // We can update state here
-                }
             }
+
             override fun onExit(code: Int) {
                 LogManager.addLog("[Sing-box] Exited with code $code")
                 if (isConnected.get()) {
-                    // reconnect if needed
+                    // If the tunnel exits unexpectedly, reconnect if enabled
                     if (alwaysReconnect) reconnect()
                 }
             }
@@ -184,13 +155,14 @@ class CustomVpnService : VpnService() {
         sendStatus("Connected")
         showNotification("Connected ✓")
 
-        // Start ping (optional)
+        // Start keep‑alive ping
         startPing()
     }
 
     private fun disconnect() {
         _state.value = VpnState.DISCONNECTING
         isConnected.set(false)
+        pingJob?.cancel()
 
         singBoxManager?.stop()
 
@@ -215,7 +187,7 @@ class CustomVpnService : VpnService() {
     }
 
     private fun startPing() {
-        CoroutineScope(Dispatchers.IO).launch {
+        pingJob = CoroutineScope(Dispatchers.IO).launch {
             while (isConnected.get()) {
                 delay(pingInterval.toLong())
                 try {
@@ -280,6 +252,6 @@ class CustomVpnService : VpnService() {
         super.onDestroy()
         disconnect()
         releaseWakeLock()
-        Log.d(TAG, "onDestroy finished")
+        LogManager.addLog("Service destroyed")
     }
 }
