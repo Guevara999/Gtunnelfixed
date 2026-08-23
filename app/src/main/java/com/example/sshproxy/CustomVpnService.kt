@@ -41,7 +41,7 @@ class CustomVpnService : VpnService() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var pingJob: Job? = null
 
-    // --- Config variables (set from Intent) ---
+    // Config
     private var sshHost: String = ""
     private var sshPort: String = ""
     private var sshUser: String = ""
@@ -140,7 +140,6 @@ class CustomVpnService : VpnService() {
             override fun onExit(code: Int) {
                 LogManager.addLog("[Sing-box] Exited with code $code")
                 if (isConnected.get()) {
-                    // If the tunnel exits unexpectedly, reconnect if enabled
                     if (alwaysReconnect) reconnect()
                 }
             }
@@ -154,8 +153,6 @@ class CustomVpnService : VpnService() {
         _state.value = VpnState.CONNECTED
         sendStatus("Connected")
         showNotification("Connected ✓")
-
-        // Start keep‑alive ping
         startPing()
     }
 
