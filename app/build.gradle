@@ -83,8 +83,6 @@ dependencies {
     kapt "androidx.room:room-compiler:$room_version"
 
     // ---------- Sing-box (libbox) ----------
-    // Try JitPack first; if it fails, use a local .aar file.
-    implementation 'com.github.singbox-android:libbox:1.13.11'
-    // If above fails, comment it out and uncomment the next line after placing libbox.aar in app/libs/
-    // implementation files('libs/libbox.aar')
+    // Use the local .aar file (downloaded during workflow)
+    implementation files('libs/libbox.aar')
 }
