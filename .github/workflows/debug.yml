@@ -47,7 +47,7 @@ jobs:
           export GOFLAGS="-tags=with_gvisor,with_quic,with_wireguard,with_clash_api,with_tailscale"
           go run ./cmd/internal/build_libbox -target android -platform android/arm64
           mkdir -p ../app/libs
-          # Use the legacy AAR to avoid cronet/naive_outbound linker errors
+          # ✅ FIX: Use legacy AAR to avoid linker errors
           cp libbox-legacy.aar ../app/libs/libbox.aar
 
       - name: Make gradlew executable
