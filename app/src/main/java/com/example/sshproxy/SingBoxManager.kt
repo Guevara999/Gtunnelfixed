@@ -5,6 +5,7 @@ import android.util.Log
 import io.nekohasekai.libbox.Libbox
 import io.nekohasekai.libbox.LibboxCallback
 import org.json.JSONObject
+import com.example.sshproxy.payload.PayloadProcessor  // ← ensure this import exists
 
 class SingBoxManager(private val context: Context) {
 
@@ -77,7 +78,7 @@ class SingBoxManager(private val context: Context) {
             put("server_port", proxyPort)
             put("method", method)
             put("path", path)
-            // Convert headers to Map<String, String> to satisfy JSONObject constructor
+            // Cast to Map<String, String> to satisfy JSONObject
             put("headers", JSONObject(headers as Map<String, String>))
         }
 
