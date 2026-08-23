@@ -44,7 +44,11 @@ jobs:
         run: |
           git clone https://github.com/SagerNet/sing-box.git
           cd sing-box
-          go run ./cmd/internal/build_libbox -target android -platform android/arm,android/arm64
+          # Omit problematic cronet-related tags to avoid linker errors
+          go run ./cmd/internal/build_libbox \
+            -target android \
+            -platform android/arm,android/arm64 \
+            -tags with_gvisor,with_quic,with_wireguard,with_clash_api,with_tailscale
           mkdir -p ../app/libs
           cp libbox.aar ../app/libs/
 
