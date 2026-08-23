@@ -6,14 +6,26 @@ import android.content.Context
 import android.content.Intent
 import android.net.VpnService
 import android.os.Build
+import android.os.ParcelFileDescriptor
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
-import io.nekohasekai.libbox.LibboxCallback
+import com.example.sshproxy.payload.PayloadProcessor
+import com.example.sshproxy.proxy.ConnectionStrategy
+import com.example.sshproxy.proxy.ProxyConnectionException
+import hev.sockstun.TProxyService
+import com.jcraft.jsch.JSch
+import com.jcraft.jsch.JSchException
+import com.jcraft.jsch.Session
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import java.io.File
+import java.io.FileOutputStream
+import java.net.NetworkInterface
+import java.net.Socket
+import java.net.SocketTimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
 
 class CustomVpnService : VpnService() {
@@ -23,6 +35,7 @@ class CustomVpnService : VpnService() {
         private const val NOTIFICATION_ID = 1
         private const val TAG = "CustomVpnService"
         private const val WAKELOCK_TAG = "HttpCustom:WakeLock"
+        private const val VPN_IP = "10.0.0.2"
 
         const val ACTION_CONNECT = "com.example.sshproxy.CONNECT"
         const val ACTION_DISCONNECT = "com.example.sshproxy.DISCONNECT"
@@ -36,12 +49,23 @@ class CustomVpnService : VpnService() {
     private val _state = MutableStateFlow(VpnState.IDLE)
     val state: StateFlow<VpnState> = _state.asStateFlow()
 
-    private var singBoxManager: SingBoxManager? = null
+    // Core members
+    private var sshSession: Session? = null
+    private var socksProxy: LocalSocks5Proxy? = null
+    private var socksPort: Int = 0
+    private var tunnelSocket: Socket? = null
+    private var vpnInterface: ParcelFileDescriptor? = null
     private val isConnected = AtomicBoolean(false)
-    private var wakeLock: PowerManager.WakeLock? = null
     private var pingJob: Job? = null
+    private var reconnectJob: Job? = null
+    private var stateJob: Job? = null
+    private var wakeLock: PowerManager.WakeLock? = null
 
-    // Config variables
+    private var reconnectAttempts = 0
+    private val MAX_RECONNECT_ATTEMPTS = 10
+    private val BASE_RECONNECT_DELAY_MS = 2000L
+
+    // --- Config ---
     private var sshHost: String = ""
     private var sshPort: String = ""
     private var sshUser: String = ""
@@ -49,18 +73,30 @@ class CustomVpnService : VpnService() {
     private var proxyHost: String = ""
     private var proxyPort: String = ""
     private var payload: String = ""
+    private var splitDelayMs: Int = 500
+    private var dnsPrimary: String = "1.1.1.1"
+    private var dnsSecondary: String = "1.0.0.1"
+    private var pingTarget: String = "1.1.1.1"
+    private var enableCompression: Boolean = true
+    private var alwaysReconnect: Boolean = false
+    private var followRedirects: Boolean = true
+    private var usePayload: Boolean = true
+    private var useSsl: Boolean = false
     private var mtu: Int = 1500
+    private var sendBuffer: Int = 16384
+    private var receiveBuffer: Int = 32768
     private var pingUrl: String = "https://dns.google"
     private var pingInterval: Int = 2000
     private var pingTimeout: Int = 10000
-    private var alwaysReconnect: Boolean = false
+    private var enhanced: Boolean = false
 
     override fun onCreate() {
         super.onCreate()
+        Log.d(TAG, "SERVICE CREATED")
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, WAKELOCK_TAG)
         createNotificationChannel()
-        singBoxManager = SingBoxManager(this)
+        startStateMonitoring()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -89,11 +125,24 @@ class CustomVpnService : VpnService() {
         proxyHost = intent.getStringExtra("proxyHost") ?: ""
         proxyPort = intent.getStringExtra("proxyPort") ?: ""
         payload = intent.getStringExtra("payload") ?: ""
+        splitDelayMs = intent.getIntExtra("splitDelay", 500)
+        dnsPrimary = intent.getStringExtra("dnsPrimary") ?: "1.1.1.1"
+        dnsSecondary = intent.getStringExtra("dnsSecondary") ?: "1.0.0.1"
+        pingTarget = intent.getStringExtra("pingTarget") ?: "1.1.1.1"
+        enableCompression = intent.getBooleanExtra("enableCompression", true)
+        alwaysReconnect = intent.getBooleanExtra("alwaysReconnect", false)
+        followRedirects = intent.getBooleanExtra("followRedirects", true)
+        usePayload = intent.getBooleanExtra("usePayload", true)
+        useSsl = intent.getBooleanExtra("proxySsl", false)
         mtu = intent.getIntExtra("mtu", 1500)
+        sendBuffer = intent.getIntExtra("sendBuffer", 16384)
+        receiveBuffer = intent.getIntExtra("receiveBuffer", 32768)
         pingUrl = intent.getStringExtra("pingUrl") ?: "https://dns.google"
         pingInterval = intent.getIntExtra("pingInterval", 2000)
         pingTimeout = intent.getIntExtra("pingTimeout", 10000)
-        alwaysReconnect = intent.getBooleanExtra("alwaysReconnect", false)
+        enhanced = intent.getBooleanExtra("enhanced", false)
+        LogManager.addLog("[DEBUG] Payload received: ${payload.take(100)}...")
+        LogManager.addLog("[DEBUG] Enhanced mode: $enhanced")
     }
 
     private fun connect() {
@@ -109,13 +158,53 @@ class CustomVpnService : VpnService() {
         _state.value = VpnState.CONNECTING
         acquireWakeLock()
         showNotification("Connecting...")
+        LogManager.addLog("starting service")
+        LogManager.addLog("ssh starting")
 
         CoroutineScope(Dispatchers.IO).launch {
-            try {
-                doConnect()
-            } catch (e: Exception) {
-                LogManager.addLog("[ERROR] Connection failed: ${e.message}")
+            var attempts = 0
+            val maxAttempts = 10
+            var compressionFailed = false
+
+            while (attempts < maxAttempts && !isConnected.get()) {
+                try {
+                    doConnect(compressionFailed)
+                    return@launch
+                } catch (e: ProxyConnectionException) {
+                    LogManager.addLog("[ERROR] Connection failed: ${e.message}")
+                    PayloadProcessor.rotateIndex++
+                    attempts++
+                    LogManager.addLog("Rotating to next host (attempt $attempts/$maxAttempts)")
+                    delay(2000)
+                } catch (e: SocketTimeoutException) {
+                    LogManager.addLog("[ERROR] Socket timeout")
+                    PayloadProcessor.rotateIndex++
+                    attempts++
+                    delay(2000)
+                } catch (e: JSchException) {
+                    if (e.message?.contains("Algorithm negotiation") == true && !compressionFailed) {
+                        LogManager.addLog("[ERROR] Compression not supported. Disabling and retrying...")
+                        compressionFailed = true
+                        enableCompression = false
+                        continue
+                    } else {
+                        LogManager.addLog("[ERROR] SSH failed: ${e.message}")
+                        PayloadProcessor.rotateIndex++
+                        attempts++
+                        delay(2000)
+                    }
+                } catch (e: Exception) {
+                    LogManager.addLog("[ERROR] Connection failed: ${e.message}")
+                    PayloadProcessor.rotateIndex++
+                    attempts++
+                    delay(2000)
+                }
+            }
+
+            if (!isConnected.get()) {
+                LogManager.addLog("[ERROR] All hosts failed. Stopping service.")
                 _state.value = VpnState.ERROR
+                sendStatus("Disconnected")
                 showNotification("Connection failed")
                 releaseWakeLock()
                 if (alwaysReconnect) reconnect()
@@ -123,46 +212,276 @@ class CustomVpnService : VpnService() {
         }
     }
 
-    private suspend fun doConnect() {
-        val config = singBoxManager!!.buildConfig(
-            sshHost, sshPort.toInt(), sshUser, sshPass,
-            proxyHost, proxyPort.toInt(), payload,
-            mtu = mtu
-        )
-
-        LogManager.addLog("[Sing-box] Starting with config:\n$config")
-
-        val success = singBoxManager!!.start(config, object : LibboxCallback {
-            override fun onLog(level: Int, message: String) {
-                LogManager.addLog("[Sing-box] $message")
-            }
-
-            override fun onExit(code: Int) {
-                LogManager.addLog("[Sing-box] Exited with code $code")
-                if (isConnected.get()) {
-                    if (alwaysReconnect) reconnect()
-                }
-            }
-        })
-
-        if (!success) {
-            throw Exception("Sing-box failed to start")
+    private suspend fun doConnect(compressionFailed: Boolean) {
+        val strategy = ConnectionStrategy()
+        val socket = try {
+            strategy.establishTunnel(
+                proxyHost = proxyHost.ifEmpty { sshHost },
+                proxyPort = if (proxyPort.isNotEmpty()) proxyPort.toInt() else sshPort.toInt(),
+                sshHost = sshHost,
+                sshPort = sshPort.toInt(),
+                payload = payload,
+                userAgent = "Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36",
+                auth = null,
+                connectTimeout = 25000,
+                readTimeout = 5000,
+                followRedirects = followRedirects,
+                splitDelayMs = splitDelayMs.toLong(),
+                useSsl = useSsl,
+                usePayload = usePayload,
+                useEnhanced = enhanced
+            )
+        } catch (e: ProxyConnectionException) {
+            LogManager.addLog("[ERROR] All connection strategies failed: ${e.message}")
+            throw e
         }
+
+        tunnelSocket = socket
+        LogManager.addLog("connected to socket ${socket.remoteSocketAddress}")
+
+        establishSSH(compressionFailed)
+
+        // ======== UDPGW PORT FORWARDING ========
+        // Try to forward local port 7300 to remote UDPGW port 7300
+        try {
+            val udpgwLocalPort = 7300
+            val udpgwRemotePort = 7300 // default UDPGW port; adjust if config uses a different port
+            sshSession?.setPortForwardingL(udpgwLocalPort, "127.0.0.1", udpgwRemotePort)
+            LogManager.addLog("[UDPGW] Forwarded local $udpgwLocalPort -> remote 127.0.0.1:$udpgwRemotePort")
+        } catch (e: Exception) {
+            LogManager.addLog("[UDPGW] Port forward failed: ${e.message}")
+            // Not critical – we can still use TCP-only DNS
+        }
+
+        // Give the SSH server time to settle before opening channels
+        delay(5000)
 
         isConnected.set(true)
         _state.value = VpnState.CONNECTED
+        reconnectAttempts = 0
         sendStatus("Connected")
         showNotification("Connected ✓")
+        try {
+            setupVpn()
+        } catch (e: Exception) {
+            LogManager.addLog("[ERROR] setupVpn crashed: ${e.message}")
+            e.printStackTrace()
+            stopSelf()
+            return
+        }
         startPing()
+
+        if (alwaysReconnect) startReconnectMonitor()
+    }
+
+    private fun establishSSH(compressionRetry: Boolean = false) {
+        val jsch = JSch()
+        val session = jsch.getSession(sshUser, sshHost, sshPort.toInt())
+        session.setPassword(sshPass)
+        session.setConfig("StrictHostKeyChecking", "no")
+        session.setConfig("ServerAliveInterval", "30")
+        session.setConfig("ServerAliveCountMax", "3")
+        session.setConfig("TCPKeepAlive", "yes")
+
+        session.setConfig("compression.c2s", "none")
+        session.setConfig("compression.s2c", "none")
+        LogManager.addLog("SSH compression forced OFF (server compatibility)")
+
+        session.setSocketFactory(object : com.jcraft.jsch.SocketFactory {
+            override fun createSocket(host: String?, port: Int): Socket = tunnelSocket ?: Socket(host, port)
+            override fun getInputStream(socket: Socket) = socket.getInputStream()
+            override fun getOutputStream(socket: Socket) = socket.getOutputStream()
+        })
+
+        session.connect(25000)
+        if (session.isConnected) {
+            sshSession = session
+            LogManager.addLog("SSH authenticated")
+        } else {
+            throw JSchException("SSH connection failed")
+        }
+    }
+
+    private fun setupVpn() {
+        if (tunnelSocket == null || tunnelSocket!!.isClosed) {
+            LogManager.addLog("[ERROR] Tunnel socket is closed before VPN setup")
+            return
+        }
+
+        try {
+            // Create TUN interface with IP 10.0.0.2/24
+            vpnInterface = Builder()
+                .addAddress("10.0.0.2", 24)
+                .addRoute("0.0.0.0", 0)
+                .setMtu(mtu)
+                .establish()
+
+            if (vpnInterface == null) {
+                LogManager.addLog("[ERROR] VPN interface creation failed (null)")
+                stopSelf()
+                return
+            }
+
+            LogManager.addLog("VPN interface created successfully (IP: 10.0.0.2/24)")
+            Thread.sleep(500)
+
+            // Start SOCKS5 proxy – bind to all interfaces (0.0.0.0)
+            try {
+                val proxy = LocalSocks5Proxy(sshSession!!)
+                socksPort = proxy.start("0.0.0.0")
+                socksProxy = proxy
+                LogManager.addLog("[SOCKS5] Proxy running on 0.0.0.0:$socksPort")
+            } catch (e: Exception) {
+                LogManager.addLog("[ERROR] SOCKS5 proxy failed: ${e.message}")
+                throw e
+            }
+
+            // Write YAML config – use 10.0.0.2 as the SOCKS5 address
+            val configPath = createTProxyConfig(socksPort, mtu)
+            if (configPath == null) {
+                LogManager.addLog("[ERROR] Failed to create tproxy config")
+                stopSelf()
+                return
+            }
+            LogManager.addLog("[tproxy] Config written to $configPath")
+
+            // (Optional) log config content for debugging
+            try {
+                val configContent = File(configPath).readText()
+                LogManager.addLog("[tproxy] Config content:\n$configContent")
+            } catch (_: Exception) {}
+
+            // Start hev
+            val tunFd = vpnInterface!!.fd
+            try {
+                LogManager.addLog("[hev-socks5-tunnel] Starting with config=$configPath, tunFd=$tunFd")
+                TProxyService.TProxyStartService(configPath, tunFd)
+                LogManager.addLog("[hev-socks5-tunnel] Started successfully")
+            } catch (e: UnsatisfiedLinkError) {
+                LogManager.addLog("[ERROR] Native library not loaded: ${e.message}")
+                throw e
+            } catch (e: Exception) {
+                LogManager.addLog("[ERROR] hev-socks5-tunnel exception: ${e.message}")
+                throw e
+            }
+
+            // Verify tun0 exists (optional)
+            try {
+                val interfaces = NetworkInterface.getNetworkInterfaces()
+                var foundTun = false
+                while (interfaces.hasMoreElements()) {
+                    if (interfaces.nextElement().name == "tun0") {
+                        foundTun = true
+                        break
+                    }
+                }
+                LogManager.addLog(if (foundTun) "[DIAG] ✅ tun0 found" else "[DIAG] ❌ tun0 NOT found")
+            } catch (_: Exception) {}
+
+            LogManager.addLog("VPN and SOCKS5 tunnel ready (hev manages routing)")
+
+        } catch (e: SecurityException) {
+            LogManager.addLog("[ERROR] VPN permission not granted: ${e.message}")
+            stopSelf()
+        } catch (e: Exception) {
+            LogManager.addLog("[ERROR] VPN setup failed: ${e.message}")
+            e.printStackTrace()
+            stopSelf()
+        }
+    }
+
+    /**
+     * Generate tproxy.conf – uses 10.0.0.2 as the SOCKS5 address.
+     * DNS uses TCP to avoid additional channels.
+     */
+    private fun createTProxyConfig(socksPort: Int, mtu: Int): String? {
+        return try {
+            val configFile = File(filesDir, "tproxy.conf")
+            configFile.createNewFile()
+            FileOutputStream(configFile).use { fos ->
+                val config = """
+                    misc:
+                      task-stack-size: 65536
+                      log-file: /data/local/tmp/hev.log
+                      log-level: debug
+                      limit:
+                        max-sessions: 1
+                        max-files: 1024
+                    tunnel:
+                      name: tun0
+                      mtu: $mtu
+                      ipv4: 10.0.0.2/24
+                      icmp: 'reply'
+                      routes:
+                        - "0.0.0.0/0"
+                    socks5:
+                      port: $socksPort
+                      address: '10.0.0.2'
+                      udp: 'udp'
+                    mapdns:
+                      address: '1.1.1.1'
+                      port: 53
+                      network: 'tcp'       # use TCP to avoid additional channels
+                      netmask: 32
+                      cache-size: 256
+                """.trimIndent()
+                fos.write(config.toByteArray())
+            }
+            configFile.absolutePath
+        } catch (e: Exception) {
+            LogManager.addLog("[ERROR] Failed to create tproxy config: ${e.message}")
+            null
+        }
     }
 
     private fun disconnect() {
         _state.value = VpnState.DISCONNECTING
         isConnected.set(false)
+        reconnectJob?.cancel()
         pingJob?.cancel()
+        stateJob?.cancel()
 
-        singBoxManager?.stop()
+        // Stop hev – catch any errors
+        try {
+            TProxyService.TProxyStopService()
+            LogManager.addLog("[hev-socks5-tunnel] Stopped")
+        } catch (e: Exception) {
+            LogManager.addLog("[ERROR] Failed to stop hev-socks5-tunnel: ${e.message}")
+        }
 
+        // Stop SOCKS5 proxy
+        try {
+            socksProxy?.stop()
+            socksProxy = null
+        } catch (e: Exception) {
+            LogManager.addLog("[ERROR] Failed to stop SOCKS5 proxy: ${e.message}")
+        }
+
+        // Disconnect SSH
+        try {
+            sshSession?.disconnect()
+            sshSession = null
+        } catch (e: Exception) {
+            LogManager.addLog("[ERROR] Failed to disconnect SSH: ${e.message}")
+        }
+
+        // Close tunnel socket
+        try {
+            tunnelSocket?.close()
+            tunnelSocket = null
+        } catch (e: Exception) {
+            LogManager.addLog("[ERROR] Failed to close tunnel socket: ${e.message}")
+        }
+
+        // Close VPN interface
+        try {
+            vpnInterface?.close()
+            vpnInterface = null
+        } catch (e: Exception) {
+            LogManager.addLog("[ERROR] Failed to close VPN interface: ${e.message}")
+        }
+
+        // Stop foreground
         stopForeground(true)
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.cancel(NOTIFICATION_ID)
@@ -171,18 +490,36 @@ class CustomVpnService : VpnService() {
         LogManager.addLog("VPN stopped")
         releaseWakeLock()
         _state.value = VpnState.IDLE
+
+        // Ensure service stops
         stopSelf()
     }
 
     private fun reconnect() {
         if (_state.value == VpnState.RECONNECTING) return
         _state.value = VpnState.RECONNECTING
-        CoroutineScope(Dispatchers.IO).launch {
-            delay(2000)
-            connect()
+        reconnectJob = CoroutineScope(Dispatchers.IO).launch {
+            while (reconnectAttempts < MAX_RECONNECT_ATTEMPTS && !isConnected.get()) {
+                val delay = BASE_RECONNECT_DELAY_MS * (1L shl reconnectAttempts.coerceAtMost(8))
+                LogManager.addLog("Reconnect attempt ${reconnectAttempts + 1} in ${delay}ms")
+                delay(delay)
+                connect()
+                if (isConnected.get()) {
+                    reconnectAttempts = 0
+                    return@launch
+                }
+                reconnectAttempts++
+            }
+            if (!isConnected.get()) {
+                _state.value = VpnState.ERROR
+                LogManager.addLog("[ERROR] All reconnect attempts failed")
+                sendStatus("Disconnected")
+                showNotification("Reconnection failed")
+            }
         }
     }
 
+    // --- Ping ---
     private fun startPing() {
         pingJob = CoroutineScope(Dispatchers.IO).launch {
             while (isConnected.get()) {
@@ -202,6 +539,27 @@ class CustomVpnService : VpnService() {
                 } catch (e: Exception) {
                     LogManager.addLog("Ping timeout")
                 }
+            }
+        }
+    }
+
+    private fun startReconnectMonitor() {
+        stateJob = CoroutineScope(Dispatchers.IO).launch {
+            while (isConnected.get()) {
+                delay(1000)
+                if (tunnelSocket == null || tunnelSocket!!.isClosed) {
+                    LogManager.addLog("[WARN] Connection lost – reconnecting")
+                    isConnected.set(false)
+                    reconnect()
+                }
+            }
+        }
+    }
+
+    private fun startStateMonitoring() {
+        stateJob = CoroutineScope(Dispatchers.Main).launch {
+            state.collect { vpnState ->
+                sendStatus(vpnState.name)
             }
         }
     }
@@ -249,6 +607,6 @@ class CustomVpnService : VpnService() {
         super.onDestroy()
         disconnect()
         releaseWakeLock()
-        LogManager.addLog("Service destroyed")
+        Log.d(TAG, "onDestroy finished")
     }
 }
