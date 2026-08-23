@@ -24,23 +24,22 @@ jobs:
           java-version: '17'
           cache: gradle
 
-      - name: Download libbox.aar
-        run: |
-          mkdir -p app/libs
-          # Try official release from sing-box-lx (reliable)
-          wget -O app/libs/libbox.aar https://github.com/Leadaxe/sing-box-lx/releases/download/v1.13.19/libbox.aar || \
-          # Fallback to Leadaxe/LxBox raw file
-          wget -O app/libs/libbox.aar https://raw.githubusercontent.com/Leadaxe/LxBox/main/app/libs/libbox.aar || \
-          # If both fail, we'll build from source (see alternative below)
-          echo "Failed to download libbox.aar; building from source will be attempted."
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
 
-      - name: Build libbox.aar from source (if download failed)
-        if: steps.download.outputs.status == 'failure'
+      - name: Set up Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26c
+
+      - name: Build libbox.aar
         run: |
-          sudo apt-get update && sudo apt-get install -y golang-go
           git clone https://github.com/SagerNet/sing-box.git
           cd sing-box
           go run ./cmd/internal/build_libbox -target android -platform android/arm,android/arm64
+          mkdir -p ../app/libs
           cp libbox.aar ../app/libs/
 
       - name: Make gradlew executable
