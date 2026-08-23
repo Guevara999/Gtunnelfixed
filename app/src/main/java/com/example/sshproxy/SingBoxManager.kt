@@ -37,10 +37,6 @@ class SingBoxManager(private val context: Context) {
 
     fun isRunning(): Boolean = Libbox.running()
 
-    /**
-     * Build the Sing-box JSON config from user settings.
-     * Uses an HTTP outbound with custom payload, then chains an SSH outbound through it.
-     */
     fun buildConfig(
         sshHost: String,
         sshPort: Int,
@@ -52,7 +48,6 @@ class SingBoxManager(private val context: Context) {
         userAgent: String = "Mozilla/5.0 (Linux; Android 12)",
         mtu: Int = 1500
     ): String {
-        // Process the payload using your existing PayloadProcessor
         val processedPayload = PayloadProcessor.processPayload(
             payload,
             sshHost,
@@ -61,7 +56,6 @@ class SingBoxManager(private val context: Context) {
             userAgent
         )
 
-        // Parse the HTTP request lines to extract method, path, and headers.
         val lines = processedPayload.split("\r\n")
         val firstLine = lines.firstOrNull() ?: "GET / HTTP/1.1"
         val method = firstLine.split(" ").getOrElse(0) { "GET" }
@@ -76,7 +70,6 @@ class SingBoxManager(private val context: Context) {
             }
         }
 
-        // HTTP outbound (the proxy with payload)
         val httpOutbound = JSONObject().apply {
             put("type", "http")
             put("tag", "http-proxy")
@@ -84,12 +77,10 @@ class SingBoxManager(private val context: Context) {
             put("server_port", proxyPort)
             put("method", method)
             put("path", path)
-            put("headers", JSONObject(headers))
-            // If your payload requires raw data (e.g., for the huge Content-Length), you may need to use "tls" or "transport" outbound.
-            // For now, we rely on the standard HTTP outbound.
+            // Convert headers to Map<String, String> to satisfy JSONObject constructor
+            put("headers", JSONObject(headers as Map<String, String>))
         }
 
-        // SSH outbound chained through the HTTP proxy
         val sshOutbound = JSONObject().apply {
             put("type", "ssh")
             put("tag", "ssh-out")
@@ -108,12 +99,11 @@ class SingBoxManager(private val context: Context) {
             })
         }
 
-        // Main configuration with TUN inbound and routing
         val config = JSONObject().apply {
             put("log", JSONObject().apply {
                 put("disabled", false)
                 put("level", "info")
-                put("output", "/dev/null") // or a file path for debugging
+                put("output", "/dev/null")
             })
             put("inbounds", listOf(
                 JSONObject().apply {
