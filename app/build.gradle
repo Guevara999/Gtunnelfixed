@@ -83,5 +83,6 @@ dependencies {
     kapt "androidx.room:room-compiler:$room_version"
 
     // ---------- Sing-box (libbox) ----------
+    // The AAR is built during the workflow and placed in app/libs/
     implementation files('libs/libbox.aar')
 }
