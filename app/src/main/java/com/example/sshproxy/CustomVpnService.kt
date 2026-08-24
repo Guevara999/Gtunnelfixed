@@ -346,7 +346,7 @@ class CustomVpnService : VpnService() {
                 LogManager.addLog("[DIAG] ❌ Proxy NOT reachable at 10.0.0.2:$socksPort – ${e.message}")
             }
 
-            // Write YAML config – use 10.0.0.2 as SOCKS5 address
+            // Write YAML config – use 10.0.0.2 as SOCKS5 address, no mapdns
             val configPath = createTProxyConfig(socksPort, mtu)
             if (configPath == null) {
                 LogManager.addLog("[ERROR] Failed to create tproxy config")
@@ -415,8 +415,7 @@ class CustomVpnService : VpnService() {
     }
 
     /**
-     * Generate tproxy.conf – uses 10.0.0.2 as SOCKS5 address.
-     * mapdns removed to avoid DNS complications.
+     * Generate tproxy.conf – uses 10.0.0.2 as SOCKS5 address, mapdns removed.
      */
     private fun createTProxyConfig(socksPort: Int, mtu: Int): String? {
         return try {
@@ -444,7 +443,7 @@ class CustomVpnService : VpnService() {
                       port: $socksPort
                       address: '10.0.0.2'
                       udp: 'udp'
-                    # mapdns removed for now
+                    # mapdns removed
                 """.trimIndent()
                 fos.write(config.toByteArray())
             }
