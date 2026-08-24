@@ -346,7 +346,17 @@ class CustomVpnService : VpnService() {
                 LogManager.addLog("[DIAG] ❌ Proxy NOT reachable at 10.0.0.2:$socksPort – ${e.message}")
             }
 
-            // Write YAML config – use internal storage for everything
+            // Also test loopback reachability (for 127.0.0.1)
+            try {
+                val testSocket = Socket()
+                testSocket.connect(InetSocketAddress("127.0.0.1", socksPort), 2000)
+                LogManager.addLog("[DIAG] ✅ Proxy reachable at 127.0.0.1:$socksPort")
+                testSocket.close()
+            } catch (e: Exception) {
+                LogManager.addLog("[DIAG] ❌ Proxy NOT reachable at 127.0.0.1:$socksPort – ${e.message}")
+            }
+
+            // Write YAML config – use 127.0.0.1 for SOCKS5 address
             val configPath = createTProxyConfig(socksPort, mtu)
             if (configPath == null) {
                 LogManager.addLog("[ERROR] Failed to create tproxy config")
@@ -367,6 +377,8 @@ class CustomVpnService : VpnService() {
                 LogManager.addLog("[hev-socks5-tunnel] Starting with config=$configPath, tunFd=$tunFd")
                 TProxyService.TProxyStartService(configPath, tunFd)
                 LogManager.addLog("[hev-socks5-tunnel] Started successfully")
+                // Give hev a moment to initialise
+                delay(1000)
             } catch (e: UnsatisfiedLinkError) {
                 LogManager.addLog("[ERROR] Native library not loaded: ${e.message}")
                 throw e
@@ -392,6 +404,11 @@ class CustomVpnService : VpnService() {
             val hevLogFile = File(filesDir, "hev.log")
             if (hevLogFile.exists()) {
                 LogManager.addLog("[DIAG] ✅ hev.log created at ${hevLogFile.absolutePath}")
+                // Read first few lines to ensure it's not empty
+                try {
+                    val firstLines = hevLogFile.readLines().take(5).joinToString("\n")
+                    LogManager.addLog("[DIAG] hev.log first lines:\n$firstLines")
+                } catch (_: Exception) {}
             } else {
                 LogManager.addLog("[DIAG] ❌ hev.log NOT created – hev may have failed silently")
             }
@@ -409,18 +426,16 @@ class CustomVpnService : VpnService() {
     }
 
     /**
-     * Generate tproxy.conf – uses internal storage for the log file.
+     * Generate tproxy.conf – uses internal storage for logs.
+     * SOCKS5 address set to 127.0.0.1 (loopback) so hev can connect.
      */
     private fun createTProxyConfig(socksPort: Int, mtu: Int): String? {
         return try {
             val configFile = File(filesDir, "tproxy.conf")
             configFile.createNewFile()
             FileOutputStream(configFile).use { fos ->
-                // Log file in internal storage – always writable
                 val logFile = File(filesDir, "hev.log")
-                // Delete old log if exists to start fresh
                 logFile.delete()
-
                 val config = """
                     misc:
                       task-stack-size: 65536
@@ -438,7 +453,7 @@ class CustomVpnService : VpnService() {
                         - "0.0.0.0/0"
                     socks5:
                       port: $socksPort
-                      address: '10.0.0.2'
+                      address: '127.0.0.1'   # ← CRITICAL FIX
                       udp: 'udp'
                     mapdns:
                       address: '1.1.1.1'
