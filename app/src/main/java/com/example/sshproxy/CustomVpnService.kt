@@ -310,11 +310,9 @@ class CustomVpnService : VpnService() {
 
         try {
             // Create TUN interface with IP 10.0.0.2/24
-            // Explicitly exclude the gateway IP 10.0.0.1 from the VPN
             vpnInterface = Builder()
                 .addAddress("10.0.0.2", 24)
                 .addRoute("0.0.0.0", 0)
-                .addRoute("10.0.0.1", 32)   // ← exclude gateway from VPN
                 .setMtu(mtu)
                 .establish()
 
@@ -327,12 +325,12 @@ class CustomVpnService : VpnService() {
             LogManager.addLog("VPN interface created successfully (IP: 10.0.0.2/24)")
             Thread.sleep(500)
 
-            // Start SOCKS5 proxy – bind to the gateway IP (10.0.0.1)
+            // Start SOCKS5 proxy – bind to all interfaces (0.0.0.0)
             try {
                 val proxy = LocalSocks5Proxy(sshSession!!)
-                socksPort = proxy.start("10.0.0.1")   // ← bind to gateway
+                socksPort = proxy.start("0.0.0.0")
                 socksProxy = proxy
-                LogManager.addLog("[SOCKS5] Proxy running on 10.0.0.1:$socksPort")
+                LogManager.addLog("[SOCKS5] Proxy running on 0.0.0.0:$socksPort")
             } catch (e: Exception) {
                 LogManager.addLog("[ERROR] SOCKS5 proxy failed: ${e.message}")
                 throw e
@@ -341,14 +339,14 @@ class CustomVpnService : VpnService() {
             // ========== DIAGNOSTIC: Check proxy reachability ==========
             try {
                 val testSocket = Socket()
-                testSocket.connect(InetSocketAddress("10.0.0.1", socksPort), 2000)
-                LogManager.addLog("[DIAG] ✅ Proxy reachable at 10.0.0.1:$socksPort")
+                testSocket.connect(InetSocketAddress("10.0.0.2", socksPort), 2000)
+                LogManager.addLog("[DIAG] ✅ Proxy reachable at 10.0.0.2:$socksPort")
                 testSocket.close()
             } catch (e: Exception) {
-                LogManager.addLog("[DIAG] ❌ Proxy NOT reachable at 10.0.0.1:$socksPort – ${e.message}")
+                LogManager.addLog("[DIAG] ❌ Proxy NOT reachable at 10.0.0.2:$socksPort – ${e.message}")
             }
 
-            // Write YAML config – use 10.0.0.1 as SOCKS5 address
+            // Write YAML config – use 10.0.0.2 as SOCKS5 address
             val configPath = createTProxyConfig(socksPort, mtu)
             if (configPath == null) {
                 LogManager.addLog("[ERROR] Failed to create tproxy config")
@@ -369,7 +367,8 @@ class CustomVpnService : VpnService() {
                 LogManager.addLog("[hev-socks5-tunnel] Starting with config=$configPath, tunFd=$tunFd")
                 TProxyService.TProxyStartService(configPath, tunFd)
                 LogManager.addLog("[hev-socks5-tunnel] Started successfully")
-                delay(1000) // give hev time to initialise
+                // Give hev time to initialise (2 seconds)
+                delay(2000)
             } catch (e: UnsatisfiedLinkError) {
                 LogManager.addLog("[ERROR] Native library not loaded: ${e.message}")
                 throw e
@@ -416,8 +415,8 @@ class CustomVpnService : VpnService() {
     }
 
     /**
-     * Generate tproxy.conf – uses 10.0.0.1 as SOCKS5 address.
-     * mapdns removed for now to simplify.
+     * Generate tproxy.conf – uses 10.0.0.2 as SOCKS5 address.
+     * mapdns removed to avoid DNS complications.
      */
     private fun createTProxyConfig(socksPort: Int, mtu: Int): String? {
         return try {
@@ -443,9 +442,9 @@ class CustomVpnService : VpnService() {
                         - "0.0.0.0/0"
                     socks5:
                       port: $socksPort
-                      address: '10.0.0.1'
+                      address: '10.0.0.2'
                       udp: 'udp'
-                    # mapdns removed for testing
+                    # mapdns removed for now
                 """.trimIndent()
                 fos.write(config.toByteArray())
             }
