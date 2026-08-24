@@ -246,8 +246,8 @@ class CustomVpnService : VpnService() {
         // ======== REMOVED THE 5-SECOND DELAY – NO IDLE TIME ========
         // Immediately send a keep-alive to prevent the server from closing the session
         try {
-            sshSession?.sendKeepAlive()
-            LogManager.addLog("[KEEPALIVE] Sent initial keep‑alive")
+            sshSession?.sendIgnorePacket(byteArrayOf())   // SSH_MSG_IGNORE keep‑alive
+            LogManager.addLog("[KEEPALIVE] Sent initial keep‑alive (IGNORE)")
         } catch (e: Exception) {
             LogManager.addLog("[KEEPALIVE] Failed: ${e.message}")
         }
@@ -299,9 +299,9 @@ class CustomVpnService : VpnService() {
                 while (sshSession?.isConnected == true) {
                     delay(5000) // every 5 seconds
                     try {
-                        sshSession?.sendKeepAlive()
+                        sshSession?.sendIgnorePacket(byteArrayOf())   // SSH_MSG_IGNORE
                         // Uncomment to log every keep-alive (can be verbose)
-                        // LogManager.addLog("[KEEPALIVE] Sent")
+                        // LogManager.addLog("[KEEPALIVE] Sent IGNORE")
                     } catch (e: Exception) {
                         // Session may have died; we'll reconnect if needed
                         if (isConnected.get()) {
