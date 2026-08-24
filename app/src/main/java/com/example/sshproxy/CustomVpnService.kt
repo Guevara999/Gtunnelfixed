@@ -243,14 +243,7 @@ class CustomVpnService : VpnService() {
 
         establishSSH(compressionFailed)
 
-        // ======== REMOVED THE 5-SECOND DELAY – NO IDLE TIME ========
-        // Immediately send a keep-alive to prevent the server from closing the session
-        try {
-            sshSession?.sendIgnorePacket(byteArrayOf())   // SSH_MSG_IGNORE keep‑alive
-            LogManager.addLog("[KEEPALIVE] Sent initial keep‑alive (IGNORE)")
-        } catch (e: Exception) {
-            LogManager.addLog("[KEEPALIVE] Failed: ${e.message}")
-        }
+        // No delay – start VPN/proxy immediately
 
         isConnected.set(true)
         _state.value = VpnState.CONNECTED
@@ -275,7 +268,7 @@ class CustomVpnService : VpnService() {
         val session = jsch.getSession(sshUser, sshHost, sshPort.toInt())
         session.setPassword(sshPass)
         session.setConfig("StrictHostKeyChecking", "no")
-        session.setConfig("ServerAliveInterval", "10")      // Keep‑alive every 10 seconds
+        session.setConfig("ServerAliveInterval", "5")       // Keep‑alive every 5 seconds
         session.setConfig("ServerAliveCountMax", "3")       // Allow 3 missed keep‑alives
         session.setConfig("TCPKeepAlive", "yes")
 
@@ -293,26 +286,7 @@ class CustomVpnService : VpnService() {
         if (session.isConnected) {
             sshSession = session
             LogManager.addLog("SSH authenticated")
-
-            // ======== START BACKGROUND KEEP‑ALIVE COROUTINE ========
-            CoroutineScope(Dispatchers.IO).launch {
-                while (sshSession?.isConnected == true) {
-                    delay(5000) // every 5 seconds
-                    try {
-                        sshSession?.sendIgnorePacket(byteArrayOf())   // SSH_MSG_IGNORE
-                        // Uncomment to log every keep-alive (can be verbose)
-                        // LogManager.addLog("[KEEPALIVE] Sent IGNORE")
-                    } catch (e: Exception) {
-                        // Session may have died; we'll reconnect if needed
-                        if (isConnected.get()) {
-                            LogManager.addLog("[KEEPALIVE] Failed, session lost")
-                            isConnected.set(false)
-                            reconnect()
-                        }
-                        break
-                    }
-                }
-            }
+            // Built‑in ServerAliveInterval will keep the session alive
         } else {
             throw JSchException("SSH connection failed")
         }
