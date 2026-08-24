@@ -6,7 +6,6 @@ import android.content.Context
 import android.content.Intent
 import android.net.VpnService
 import android.os.Build
-import android.os.Environment
 import android.os.ParcelFileDescriptor
 import android.os.PowerManager
 import android.util.Log
@@ -347,7 +346,7 @@ class CustomVpnService : VpnService() {
                 LogManager.addLog("[DIAG] ❌ Proxy NOT reachable at 10.0.0.2:$socksPort – ${e.message}")
             }
 
-            // Write YAML config – use the user's custom folder for hev log
+            // Write YAML config – use internal storage for everything
             val configPath = createTProxyConfig(socksPort, mtu)
             if (configPath == null) {
                 LogManager.addLog("[ERROR] Failed to create tproxy config")
@@ -389,8 +388,8 @@ class CustomVpnService : VpnService() {
                 LogManager.addLog(if (foundTun) "[DIAG] ✅ tun0 found" else "[DIAG] ❌ tun0 NOT found")
             } catch (_: Exception) {}
 
-            // Check if hev log file was created in the user's folder
-            val hevLogFile = getHevLogFile()
+            // Check if hev log file was created (internal storage)
+            val hevLogFile = File(filesDir, "hev.log")
             if (hevLogFile.exists()) {
                 LogManager.addLog("[DIAG] ✅ hev.log created at ${hevLogFile.absolutePath}")
             } else {
@@ -410,33 +409,15 @@ class CustomVpnService : VpnService() {
     }
 
     /**
-     * Determine the hev log file path.
-     * First, try the user's custom folder: /storage/emulated/0/hevlogs/hev.log
-     * If that fails (e.g., permissions), fall back to internal storage.
-     */
-    private fun getHevLogFile(): File {
-        // Try user's custom folder
-        val customDir = File(Environment.getExternalStorageDirectory(), "hevlogs")
-        if (customDir.exists() || customDir.mkdirs()) {
-            val file = File(customDir, "hev.log")
-            if (file.canWrite() || file.createNewFile()) {
-                return file
-            }
-        }
-        // Fallback to internal storage
-        LogManager.addLog("[WARN] Cannot write to /storage/emulated/0/hevlogs, falling back to internal storage")
-        return File(filesDir, "hev.log")
-    }
-
-    /**
-     * Generate tproxy.conf – uses the user's custom folder for logs.
+     * Generate tproxy.conf – uses internal storage for the log file.
      */
     private fun createTProxyConfig(socksPort: Int, mtu: Int): String? {
         return try {
             val configFile = File(filesDir, "tproxy.conf")
             configFile.createNewFile()
             FileOutputStream(configFile).use { fos ->
-                val logFile = getHevLogFile()
+                // Log file in internal storage – always writable
+                val logFile = File(filesDir, "hev.log")
                 // Delete old log if exists to start fresh
                 logFile.delete()
 
@@ -471,6 +452,7 @@ class CustomVpnService : VpnService() {
             configFile.absolutePath
         } catch (e: Exception) {
             LogManager.addLog("[ERROR] Failed to create tproxy config: ${e.message}")
+            e.printStackTrace()
             null
         }
     }
