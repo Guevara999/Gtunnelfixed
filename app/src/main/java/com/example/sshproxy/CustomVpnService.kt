@@ -262,7 +262,7 @@ class CustomVpnService : VpnService() {
         sendStatus("Connected")
         showNotification("Connected ✓")
         try {
-            setupVpn()
+            setupVpn()  // now suspend
         } catch (e: Exception) {
             LogManager.addLog("[ERROR] setupVpn crashed: ${e.message}")
             e.printStackTrace()
@@ -302,7 +302,8 @@ class CustomVpnService : VpnService() {
         }
     }
 
-    private fun setupVpn() {
+    // ✅ FIXED: Made suspend so we can use delay()
+    private suspend fun setupVpn() {
         if (tunnelSocket == null || tunnelSocket!!.isClosed) {
             LogManager.addLog("[ERROR] Tunnel socket is closed before VPN setup")
             return
@@ -377,7 +378,7 @@ class CustomVpnService : VpnService() {
                 LogManager.addLog("[hev-socks5-tunnel] Starting with config=$configPath, tunFd=$tunFd")
                 TProxyService.TProxyStartService(configPath, tunFd)
                 LogManager.addLog("[hev-socks5-tunnel] Started successfully")
-                // Give hev a moment to initialise
+                // Give hev a moment to initialise – now allowed because setupVpn() is suspend
                 delay(1000)
             } catch (e: UnsatisfiedLinkError) {
                 LogManager.addLog("[ERROR] Native library not loaded: ${e.message}")
