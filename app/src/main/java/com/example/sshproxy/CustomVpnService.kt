@@ -243,15 +243,8 @@ class CustomVpnService : VpnService() {
 
         establishSSH(compressionFailed)
 
-        // ======== UDPGW PORT FORWARDING ========
-        try {
-            val udpgwLocalPort = 7300
-            val udpgwRemotePort = 7300
-            sshSession?.setPortForwardingL(udpgwLocalPort, "127.0.0.1", udpgwRemotePort)
-            LogManager.addLog("[UDPGW] Forwarded local $udpgwLocalPort -> remote 127.0.0.1:$udpgwRemotePort")
-        } catch (e: Exception) {
-            LogManager.addLog("[UDPGW] Port forward failed: ${e.message}")
-        }
+        // UDPGW REMOVED – it was consuming the only channel
+        // Keep-alive is now handled by ServerAliveInterval (5s) in establishSSH
 
         // Give the SSH server time to settle
         delay(5000)
@@ -279,8 +272,8 @@ class CustomVpnService : VpnService() {
         val session = jsch.getSession(sshUser, sshHost, sshPort.toInt())
         session.setPassword(sshPass)
         session.setConfig("StrictHostKeyChecking", "no")
-        session.setConfig("ServerAliveInterval", "30")
-        session.setConfig("ServerAliveCountMax", "3")
+        session.setConfig("ServerAliveInterval", "5")      // Keep‑alive every 5 seconds
+        session.setConfig("ServerAliveCountMax", "10")     // Allow 10 missed keep‑alives
         session.setConfig("TCPKeepAlive", "yes")
 
         session.setConfig("compression.c2s", "none")
@@ -367,8 +360,7 @@ class CustomVpnService : VpnService() {
                 LogManager.addLog("[hev-socks5-tunnel] Starting with config=$configPath, tunFd=$tunFd")
                 TProxyService.TProxyStartService(configPath, tunFd)
                 LogManager.addLog("[hev-socks5-tunnel] Started successfully")
-                // Give hev time to initialise (2 seconds)
-                delay(2000)
+                delay(2000) // give hev time to initialise
             } catch (e: UnsatisfiedLinkError) {
                 LogManager.addLog("[ERROR] Native library not loaded: ${e.message}")
                 throw e
