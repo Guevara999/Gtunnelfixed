@@ -1,14 +1,15 @@
 package com.example.sshproxy
 
-import android.util.Log
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.net.VpnService
 import android.os.Build
+import android.os.Environment
 import android.os.ParcelFileDescriptor
 import android.os.PowerManager
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import com.example.sshproxy.payload.PayloadProcessor
@@ -24,6 +25,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
 import java.io.FileOutputStream
+import java.net.InetSocketAddress
 import java.net.NetworkInterface
 import java.net.Socket
 import java.net.SocketTimeoutException
@@ -243,18 +245,16 @@ class CustomVpnService : VpnService() {
         establishSSH(compressionFailed)
 
         // ======== UDPGW PORT FORWARDING ========
-        // Try to forward local port 7300 to remote UDPGW port 7300
         try {
             val udpgwLocalPort = 7300
-            val udpgwRemotePort = 7300 // default UDPGW port; adjust if config uses a different port
+            val udpgwRemotePort = 7300
             sshSession?.setPortForwardingL(udpgwLocalPort, "127.0.0.1", udpgwRemotePort)
             LogManager.addLog("[UDPGW] Forwarded local $udpgwLocalPort -> remote 127.0.0.1:$udpgwRemotePort")
         } catch (e: Exception) {
             LogManager.addLog("[UDPGW] Port forward failed: ${e.message}")
-            // Not critical – we can still use TCP-only DNS
         }
 
-        // Give the SSH server time to settle before opening channels
+        // Give the SSH server time to settle
         delay(5000)
 
         isConnected.set(true)
@@ -326,7 +326,7 @@ class CustomVpnService : VpnService() {
             LogManager.addLog("VPN interface created successfully (IP: 10.0.0.2/24)")
             Thread.sleep(500)
 
-            // Start SOCKS5 proxy – bind to all interfaces (0.0.0.0)
+            // Start SOCKS5 proxy – bind to all interfaces
             try {
                 val proxy = LocalSocks5Proxy(sshSession!!)
                 socksPort = proxy.start("0.0.0.0")
@@ -337,7 +337,17 @@ class CustomVpnService : VpnService() {
                 throw e
             }
 
-            // Write YAML config – use 10.0.0.2 as the SOCKS5 address
+            // ========== DIAGNOSTIC: Check proxy reachability (safe – no SSH channel) ==========
+            try {
+                val testSocket = Socket()
+                testSocket.connect(InetSocketAddress("10.0.0.2", socksPort), 2000)
+                LogManager.addLog("[DIAG] ✅ Proxy reachable at 10.0.0.2:$socksPort")
+                testSocket.close()
+            } catch (e: Exception) {
+                LogManager.addLog("[DIAG] ❌ Proxy NOT reachable at 10.0.0.2:$socksPort – ${e.message}")
+            }
+
+            // Write YAML config – use the user's custom folder for hev log
             val configPath = createTProxyConfig(socksPort, mtu)
             if (configPath == null) {
                 LogManager.addLog("[ERROR] Failed to create tproxy config")
@@ -346,7 +356,7 @@ class CustomVpnService : VpnService() {
             }
             LogManager.addLog("[tproxy] Config written to $configPath")
 
-            // (Optional) log config content for debugging
+            // Log config content for debugging
             try {
                 val configContent = File(configPath).readText()
                 LogManager.addLog("[tproxy] Config content:\n$configContent")
@@ -379,6 +389,14 @@ class CustomVpnService : VpnService() {
                 LogManager.addLog(if (foundTun) "[DIAG] ✅ tun0 found" else "[DIAG] ❌ tun0 NOT found")
             } catch (_: Exception) {}
 
+            // Check if hev log file was created in the user's folder
+            val hevLogFile = getHevLogFile()
+            if (hevLogFile.exists()) {
+                LogManager.addLog("[DIAG] ✅ hev.log created at ${hevLogFile.absolutePath}")
+            } else {
+                LogManager.addLog("[DIAG] ❌ hev.log NOT created – hev may have failed silently")
+            }
+
             LogManager.addLog("VPN and SOCKS5 tunnel ready (hev manages routing)")
 
         } catch (e: SecurityException) {
@@ -392,18 +410,40 @@ class CustomVpnService : VpnService() {
     }
 
     /**
-     * Generate tproxy.conf – uses 10.0.0.2 as the SOCKS5 address.
-     * DNS uses TCP to avoid additional channels.
+     * Determine the hev log file path.
+     * First, try the user's custom folder: /storage/emulated/0/hevlogs/hev.log
+     * If that fails (e.g., permissions), fall back to internal storage.
+     */
+    private fun getHevLogFile(): File {
+        // Try user's custom folder
+        val customDir = File(Environment.getExternalStorageDirectory(), "hevlogs")
+        if (customDir.exists() || customDir.mkdirs()) {
+            val file = File(customDir, "hev.log")
+            if (file.canWrite() || file.createNewFile()) {
+                return file
+            }
+        }
+        // Fallback to internal storage
+        LogManager.addLog("[WARN] Cannot write to /storage/emulated/0/hevlogs, falling back to internal storage")
+        return File(filesDir, "hev.log")
+    }
+
+    /**
+     * Generate tproxy.conf – uses the user's custom folder for logs.
      */
     private fun createTProxyConfig(socksPort: Int, mtu: Int): String? {
         return try {
             val configFile = File(filesDir, "tproxy.conf")
             configFile.createNewFile()
             FileOutputStream(configFile).use { fos ->
+                val logFile = getHevLogFile()
+                // Delete old log if exists to start fresh
+                logFile.delete()
+
                 val config = """
                     misc:
                       task-stack-size: 65536
-                      log-file: /data/local/tmp/hev.log
+                      log-file: ${logFile.absolutePath}
                       log-level: debug
                       limit:
                         max-sessions: 1
@@ -422,7 +462,7 @@ class CustomVpnService : VpnService() {
                     mapdns:
                       address: '1.1.1.1'
                       port: 53
-                      network: 'tcp'       # use TCP to avoid additional channels
+                      network: 'tcp'
                       netmask: 32
                       cache-size: 256
                 """.trimIndent()
