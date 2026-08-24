@@ -83,7 +83,6 @@ class ProxyConnector {
                 payload, sshHost, sshPort.toString(), proxyString, userAgent
             )
 
-            // ========== ALWAYS SPLIT BY [split] ==========
             val parts = PayloadProcessor.splitPayload(processedPayload)
             LogManager.addLog("[ProxyConnector] Split into ${parts.size} parts")
             for ((index, part) in parts.withIndex()) {
@@ -94,22 +93,16 @@ class ProxyConnector {
                 }
             }
             LogManager.addLog("[ProxyConnector] Payload sent (${parts.size} parts)")
-
-            // If enhanced mode is on, we might add extra behaviour (e.g., WebSocket upgrade)
-            // But splitting is always done.
-            if (useEnhanced) {
-                LogManager.addLog("[ProxyConnector] Enhanced mode: additional headers/upgrade may be applied")
-                // For now, nothing extra needed; the payload already contains Upgrade: websocket
-            }
         } else {
             LogManager.addLog("[ProxyConnector] No payload to send (usePayload=false)")
         }
 
         // ---- READ THE RESPONSE ----
         try {
-            socket.soTimeout = 10000
+            socket.soTimeout = 10000 // 10 seconds for the response
             val reader = BufferedReader(InputStreamReader(input))
 
+            // Read status line
             var statusLine: String? = reader.readLine()
             LogManager.addLog("[ProxyConnector] Server status: $statusLine")
 
@@ -119,6 +112,14 @@ class ProxyConnector {
                 LogManager.addLog("[ProxyConnector] Delayed server status: $statusLine")
             }
 
+            // ========== CRITICAL FIX: For 101, stop reading immediately ==========
+            if (statusLine != null && statusLine.contains("101")) {
+                LogManager.addLog("[ProxyConnector] ✅ WebSocket upgrade (101) – returning socket immediately for SSH")
+                socket.soTimeout = 30000
+                return socket
+            }
+
+            // For non-101 responses, read headers normally
             var line: String?
             while (reader.ready().also { line = reader.readLine() } && line != null) {
                 if (line!!.isEmpty()) {
@@ -130,11 +131,9 @@ class ProxyConnector {
                     LogManager.addLog("[ProxyConnector] SSH banner detected – stopping read")
                     break
                 }
-                if (line!!.startsWith("HTTP/1.1 101")) {
-                    LogManager.addLog("[ProxyConnector] ✅ WebSocket upgrade confirmed")
-                }
             }
 
+            // Validate response (for non-101)
             if (statusLine != null) {
                 val isAccepted = statusLine.startsWith("HTTP/1.1 2") ||
                         statusLine.startsWith("HTTP/1.1 3") ||
