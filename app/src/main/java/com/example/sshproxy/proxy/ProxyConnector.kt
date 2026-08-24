@@ -83,21 +83,23 @@ class ProxyConnector {
                 payload, sshHost, sshPort.toString(), proxyString, userAgent
             )
 
-            if (useEnhanced) {
-                LogManager.addLog("[Enhanced] Sending full payload (no split)")
-                output.write(processedPayload.toByteArray())
+            // ========== ALWAYS SPLIT BY [split] ==========
+            val parts = PayloadProcessor.splitPayload(processedPayload)
+            LogManager.addLog("[ProxyConnector] Split into ${parts.size} parts")
+            for ((index, part) in parts.withIndex()) {
+                output.write(part.toByteArray())
                 output.flush()
-            } else {
-                val parts = PayloadProcessor.splitPayload(processedPayload)
-                LogManager.addLog("[ProxyConnector] Split into ${parts.size} parts")
-                for ((index, part) in parts.withIndex()) {
-                    output.write(part.toByteArray())
-                    output.flush()
-                    if (index < parts.size - 1 && splitDelayMs > 0) {
-                        Thread.sleep(splitDelayMs)
-                    }
+                if (index < parts.size - 1 && splitDelayMs > 0) {
+                    Thread.sleep(splitDelayMs)
                 }
-                LogManager.addLog("[ProxyConnector] Payload sent (${parts.size} parts)")
+            }
+            LogManager.addLog("[ProxyConnector] Payload sent (${parts.size} parts)")
+
+            // If enhanced mode is on, we might add extra behaviour (e.g., WebSocket upgrade)
+            // But splitting is always done.
+            if (useEnhanced) {
+                LogManager.addLog("[ProxyConnector] Enhanced mode: additional headers/upgrade may be applied")
+                // For now, nothing extra needed; the payload already contains Upgrade: websocket
             }
         } else {
             LogManager.addLog("[ProxyConnector] No payload to send (usePayload=false)")
