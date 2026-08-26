@@ -10,18 +10,48 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
           cache: gradle
+
+      # ====== Build libbox.aar from source ======
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Install gomobile
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          gomobile init
+
+      - name: Build libbox.aar
+        run: |
+          git clone --depth 1 --branch v1.10.0 https://github.com/SagerNet/sing-box.git
+          cd sing-box
+          go mod tidy
+          go get -tool golang.org/x/mobile/cmd/gobind
+          gomobile bind -target=android -androidapi 21 -o libbox.aar ./experimental/libbox
+          mkdir -p ../app/libs
+          cp libbox.aar ../app/libs/
+
+      - name: Verify libbox.aar
+        run: ls -la app/libs/libbox.aar
+
+      # ====== Build your app ======
       - name: Make gradlew executable
         run: chmod +x gradlew
+
       - name: Build debug APK
         run: ./gradlew assembleDebug --no-daemon
+
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
