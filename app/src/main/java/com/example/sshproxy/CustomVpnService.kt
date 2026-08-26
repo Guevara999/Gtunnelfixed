@@ -128,7 +128,7 @@ class CustomVpnService : VpnService() {
     }
 
     private suspend fun doConnect() {
-        // 1. TUN interface (we still create it; libbox may use it)
+        // 1. Create TUN interface via VpnService.Builder
         vpnInterface = Builder()
             .addAddress("172.19.0.1", 30)
             .addRoute("0.0.0.0", 0)
@@ -136,25 +136,26 @@ class CustomVpnService : VpnService() {
             .establish() ?: throw Exception("VPN interface creation failed")
         LogManager.addLog("TUN interface created (fd=${vpnInterface?.fd})")
 
-        // 2. Config JSON
+        // 2. Build the sing-box JSON configuration
         val configJson = buildSingBoxConfig()
         LogManager.addLog("Config built:\n$configJson")
 
-        // 3. PlatformInterface – include ALL required methods
+        // 3. Implement PlatformInterface with ALL required methods (stubs)
         val platform = object : PlatformInterface {
-            // --- Required by this version ---
             override fun getInterfaces(): NetworkInterfaceIterator? = null
             override fun autoDetectInterfaceControl(fd: Int) {}
             override fun closeDefaultInterfaceMonitor(listener: InterfaceUpdateListener?) {}
             override fun clearDNSCache() {}
-            override fun findConnectionOwner(fd: Int, dest: String?, port: Int, source: String?, sourcePort: Int): Int = 0
+            override fun findConnectionOwner(
+                fd: Int,
+                dest: String?,
+                port: Int,
+                source: String?,
+                sourcePort: Int
+            ): Int = 0
             override fun includeAllNetworks(): Boolean = false
-            override fun openTun(options: TunOptions?): Int {
-                // The TUN is already opened via VpnService.Builder,
-                // but this method might be called by libbox; we just return 0.
-                return 0
-            }
-            // --- Getters ---
+            override fun openTun(options: TunOptions?): Int = 0
+            override fun packageNameByUid(uid: Int): String = ""
             override fun getDeviceId(): String = "Gtunnel"
             override fun getDeviceName(): String = "Gtunnel"
             override fun getIsAdmin(): Boolean = true
@@ -173,10 +174,8 @@ class CustomVpnService : VpnService() {
             override fun getAndroidVPN(): String? = null
         }
 
-        // 4. TunOptions – use no-arg constructor and set properties
-        val options = TunOptions()
-        options.platform = platform
-        options.configContent = configJson
+        // 4. Create TunOptions with platform and config
+        val options = TunOptions(platform, configJson)
 
         // 5. Start libbox service
         libboxService = Service()
