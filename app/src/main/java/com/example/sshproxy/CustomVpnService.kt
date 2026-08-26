@@ -151,7 +151,7 @@ class CustomVpnService : VpnService() {
         val configJson = buildSingBoxConfig()
         LogManager.addLog("Config built:\n$configJson")
 
-        // 3. Implement PlatformInterface
+        // 3. PlatformInterface implementation (all required methods)
         val platform = object : PlatformInterface {
             // ---------- Required methods ----------
             override fun autoDetectInterfaceControl(fd: Int) {
@@ -159,11 +159,22 @@ class CustomVpnService : VpnService() {
             }
 
             override fun closeDefaultInterfaceMonitor(listener: InterfaceUpdateListener?) {
-                // no-op (we don't monitor interface changes)
+                // no-op
             }
 
             override fun clearDNSCache() {
                 // no-op
+            }
+
+            override fun findConnectionOwner(
+                fd: Int,
+                dest: String?,
+                port: Int,
+                source: String?,
+                sourcePort: Int
+            ): Int {
+                // Return 0 (owner unknown) – we don't use connection owner tracking
+                return 0
             }
 
             // ---------- Getters ----------
