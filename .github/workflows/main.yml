@@ -30,25 +30,21 @@ jobs:
           go install golang.org/x/mobile/cmd/gomobile@latest
           gomobile init
 
-      - name: Build libbox.aar (armeabi-v7a + arm64-v8a only)
+      - name: Build libbox.aar (all ABIs)
         run: |
           git clone https://github.com/SagerNet/sing-box.git
           cd sing-box
           git checkout v1.14.0-rc.1
-          go run ./cmd/internal/build_libbox -target android/arm,android/arm64
-          # List files to debug
-          echo "Files in current directory:"
-          ls -la
-          echo "Files in build/ (if exists):"
-          ls -la build/ 2>/dev/null || echo "build/ not found"
-          # Find .aar file
-          AAR_FILE=$(find . -name "*.aar" | head -n 1)
-          if [ -n "$AAR_FILE" ]; then
-            echo "Found AAR: $AAR_FILE"
+          # Build the AAR for all Android ABIs
+          go run ./cmd/internal/build_libbox -target android -v
+          # The AAR is placed in the repository root
+          if [ -f libbox.aar ]; then
             mkdir -p ../app/libs
-            cp "$AAR_FILE" ../app/libs/libbox.aar
+            cp libbox.aar ../app/libs/
           else
-            echo "No .aar file found. Aborting."
+            echo "libbox.aar not found in root"
+            # Try to find it anyway
+            find . -name "*.aar" -exec ls -l {} \;
             exit 1
           fi
 
