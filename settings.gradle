@@ -11,7 +11,8 @@ dependencyResolutionManagement {
         google()
         mavenCentral()
         maven { url 'https://jitpack.io' }
-        maven { url 'https://maven.nekohasekai.io/repository/maven-public/' }   // ← Add this
+        // The Nekohasekai repo is optional – it's not used now
+        // maven { url 'https://maven.nekohasekai.io/repository/maven-public/' }
     }
 }
 rootProject.name = "SSH Proxy"
