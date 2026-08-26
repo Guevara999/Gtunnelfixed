@@ -30,17 +30,21 @@ jobs:
           go install golang.org/x/mobile/cmd/gomobile@latest
           gomobile init
 
-      - name: Build libbox.aar (latest stable sing-box)
+      - name: Build libbox.aar (armeabi-v7a + arm64-v8a only)
         run: |
           git clone https://github.com/SagerNet/sing-box.git
           cd sing-box
-          # Use the latest release tag – change to a specific version if needed
           git checkout v1.14.0-rc.1
-          go mod tidy
-          go get -tool golang.org/x/mobile/cmd/gobind
-          gomobile bind -target=android -androidapi 21 -o libbox.aar ./experimental/libbox
-          mkdir -p ../app/libs
-          cp libbox.aar ../app/libs/
+          go run ./cmd/internal/build_libbox -target android/arm,android/arm64
+          # Find and copy the AAR
+          if [ -f libbox.aar ]; then
+            cp libbox.aar ../app/libs/
+          elif [ -f build/libbox.aar ]; then
+            cp build/libbox.aar ../app/libs/
+          else
+            echo "libbox.aar not found"
+            exit 1
+          fi
 
       - name: Verify libbox.aar
         run: ls -la app/libs/libbox.aar
