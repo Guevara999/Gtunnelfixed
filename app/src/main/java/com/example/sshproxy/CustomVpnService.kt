@@ -138,7 +138,7 @@ class CustomVpnService : VpnService() {
     }
 
     private suspend fun doConnect() {
-        // Create TUN interface
+        // 1. Create TUN interface
         vpnInterface = Builder()
             .addAddress("172.19.0.1", 30)
             .addRoute("0.0.0.0", 0)
@@ -146,15 +146,20 @@ class CustomVpnService : VpnService() {
             .establish() ?: throw Exception("VPN interface creation failed")
         LogManager.addLog("TUN interface created (fd=${vpnInterface?.fd})")
 
-        // Build sing-box JSON config
+        // 2. Build sing-box JSON config
         val configJson = buildSingBoxConfig()
         LogManager.addLog("Config built:\n$configJson")
 
-        // Prepare PlatformInterface (required by libbox)
+        // 3. Implement PlatformInterface (must include all abstract methods)
         val platform = object : PlatformInterface {
             override fun autoDetectInterfaceControl(fd: Int) {
-                // no-op – required but not used
+                // not used
             }
+
+            override fun clearDNSCache() {
+                // not used
+            }
+
             override fun getDeviceId(): String = "Gtunnel"
             override fun getDeviceName(): String = "Gtunnel"
             override fun getIsAdmin(): Boolean = true
@@ -173,11 +178,10 @@ class CustomVpnService : VpnService() {
             override fun getAndroidVPN(): String? = null
         }
 
-        // Create TunOptions and start service
-        val options = TunOptions()
-        options.platform = platform
-        options.configContent = configJson
+        // 4. Create TunOptions (constructor takes PlatformInterface and config string)
+        val options = TunOptions(platform, configJson)
 
+        // 5. Start libbox service
         libboxService = Service()
         libboxService?.start(vpnInterface!!.fd, options)
         LogManager.addLog("libbox service started")
@@ -204,7 +208,6 @@ class CustomVpnService : VpnService() {
 
         val outbounds = mutableListOf<Map<String, Any>>()
 
-        // HTTP outbound (payload)
         outbounds.add(
             mapOf(
                 "type" to "http",
@@ -217,7 +220,6 @@ class CustomVpnService : VpnService() {
             )
         )
 
-        // SSH outbound with detour to HTTP
         outbounds.add(
             mapOf(
                 "type" to "ssh",
