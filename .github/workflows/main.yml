@@ -20,7 +20,7 @@ jobs:
           java-version: '17'
           cache: gradle
 
-      # ---- Build libbox.aar from source ----
+      # ---- Build libbox.aar from sing-box v1.11.0 ----
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -31,10 +31,12 @@ jobs:
           go install golang.org/x/mobile/cmd/gomobile@latest
           gomobile init
 
-      - name: Build libbox.aar
+      - name: Build libbox.aar (sing-box v1.11.0)
         run: |
-          git clone --depth 1 --branch v1.10.0 https://github.com/SagerNet/sing-box.git
+          git clone https://github.com/SagerNet/sing-box.git
           cd sing-box
+          # Use the tag v1.11.0 (stable and has all required API)
+          git checkout v1.11.0
           go mod tidy
           go get -tool golang.org/x/mobile/cmd/gobind
           gomobile bind -target=android -androidapi 21 -o libbox.aar ./experimental/libbox
@@ -44,7 +46,7 @@ jobs:
       - name: Verify libbox.aar
         run: ls -la app/libs/libbox.aar
 
-      # ---- Build the app ----
+      # ---- Build your app ----
       - name: Make gradlew executable
         run: chmod +x gradlew
 
