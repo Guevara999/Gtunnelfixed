@@ -30,39 +30,15 @@ jobs:
           go install golang.org/x/mobile/cmd/gomobile@latest
           gomobile init
 
-      - name: Build libbox.aar (using official script)
+      - name: Build libbox.aar (sing‑box v1.10.0)
         run: |
-          git clone https://github.com/SagerNet/sing-box.git
+          git clone --depth 1 --branch v1.10.0 https://github.com/SagerNet/sing-box.git
           cd sing-box
-          git checkout v1.14.0-rc.1
-          # Run the build script without extra flags
-          go run ./cmd/internal/build_libbox -target android
-          # Check if AAR is in the root
-          if [ -f libbox.aar ]; then
-            mkdir -p ../app/libs
-            cp libbox.aar ../app/libs/
-            echo "libbox.aar copied from root"
-          else
-            # If not in root, search for it
-            AAR=$(find . -name "*.aar" | head -n 1)
-            if [ -n "$AAR" ]; then
-              echo "Found AAR at $AAR"
-              mkdir -p ../app/libs
-              cp "$AAR" ../app/libs/libbox.aar
-            else
-              echo "No AAR found after script. Falling back to direct gomobile build."
-              # Fallback: direct gomobile bind (which we know works)
-              cd ..
-              git clone https://github.com/SagerNet/sing-box.git sing-box-fallback
-              cd sing-box-fallback
-              git checkout v1.14.0-rc.1
-              go mod tidy
-              go get -tool golang.org/x/mobile/cmd/gobind
-              gomobile bind -target=android -androidapi 21 -o libbox.aar ./experimental/libbox
-              mkdir -p ../app/libs
-              cp libbox.aar ../app/libs/
-            fi
-          fi
+          go mod tidy
+          go get -tool golang.org/x/mobile/cmd/gobind
+          gomobile bind -target=android -androidapi 21 -o libbox.aar ./experimental/libbox
+          mkdir -p ../app/libs
+          cp libbox.aar ../app/libs/
 
       - name: Verify libbox.aar
         run: ls -la app/libs/libbox.aar
