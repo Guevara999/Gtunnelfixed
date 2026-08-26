@@ -36,13 +36,19 @@ jobs:
           cd sing-box
           git checkout v1.14.0-rc.1
           go run ./cmd/internal/build_libbox -target android/arm,android/arm64
-          # Find and copy the AAR
-          if [ -f libbox.aar ]; then
-            cp libbox.aar ../app/libs/
-          elif [ -f build/libbox.aar ]; then
-            cp build/libbox.aar ../app/libs/
+          # List files to debug
+          echo "Files in current directory:"
+          ls -la
+          echo "Files in build/ (if exists):"
+          ls -la build/ 2>/dev/null || echo "build/ not found"
+          # Find .aar file
+          AAR_FILE=$(find . -name "*.aar" | head -n 1)
+          if [ -n "$AAR_FILE" ]; then
+            echo "Found AAR: $AAR_FILE"
+            mkdir -p ../app/libs
+            cp "$AAR_FILE" ../app/libs/libbox.aar
           else
-            echo "libbox.aar not found"
+            echo "No .aar file found. Aborting."
             exit 1
           fi
 
