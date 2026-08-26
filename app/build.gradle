@@ -49,14 +49,14 @@ android {
         jvmTarget = '17'
     }
 
-    // Exclude all old/unused files from compilation
+    // Exclude old/unused files from compilation
     sourceSets {
         main {
             java {
                 exclude '**/hev/**'
                 exclude '**/tproxy/**'
                 exclude '**/LocalSocks5Proxy.kt'
-                exclude '**/ConnectionStrategy.kt'   // if it exists
+                exclude '**/ConnectionStrategy.kt'
             }
         }
     }
