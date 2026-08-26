@@ -15,6 +15,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import libbox.InterfaceUpdateListener
 import libbox.PlatformInterface
 import libbox.Service
 import libbox.TunOptions
@@ -150,36 +151,48 @@ class CustomVpnService : VpnService() {
         val configJson = buildSingBoxConfig()
         LogManager.addLog("Config built:\n$configJson")
 
-        // 3. Implement PlatformInterface (must include all abstract methods)
+        // 3. Implement PlatformInterface
         val platform = object : PlatformInterface {
+            // ---------- Required methods ----------
             override fun autoDetectInterfaceControl(fd: Int) {
-                // not used
+                // no-op
+            }
+
+            override fun closeDefaultInterfaceMonitor(listener: InterfaceUpdateListener?) {
+                // no-op (we don't monitor interface changes)
             }
 
             override fun clearDNSCache() {
-                // not used
+                // no-op
             }
 
+            // ---------- Getters ----------
             override fun getDeviceId(): String = "Gtunnel"
             override fun getDeviceName(): String = "Gtunnel"
             override fun getIsAdmin(): Boolean = true
+
             override fun getSharedData(path: String?): String? = null
             override fun setSharedData(path: String?, data: String?) {}
+
             override fun getAppData(): String? = null
             override fun getAppPath(): String? = null
             override fun getCachePath(): String? = null
-            override fun getPackageName(): String = packageName
+            override fun getPackageName(): String = this@CustomVpnService.packageName
             override fun isPackageInstalled(pkg: String?): Boolean = false
+
             override fun openFile(path: String?, flags: Int): ParcelFileDescriptor? = null
             override fun requirePermission(perm: String?) {}
+
             override fun getNetwork(): String? = null
             override fun getDefaultInterface(): String? = "tun0"
             override fun getInterfaceAddresses(iface: String?): List<String> = listOf()
             override fun getAndroidVPN(): String? = null
         }
 
-        // 4. Create TunOptions (constructor takes PlatformInterface and config string)
-        val options = TunOptions(platform, configJson)
+        // 4. Create TunOptions and set fields
+        val options = TunOptions()
+        options.platform = platform
+        options.configContent = configJson
 
         // 5. Start libbox service
         libboxService = Service()
