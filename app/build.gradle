@@ -48,6 +48,17 @@ android {
     kotlinOptions {
         jvmTarget = '17'
     }
+
+    // ===== Exclude hev and tproxy packages from compilation =====
+    sourceSets {
+        main {
+            java {
+                exclude '**/hev/**'
+                exclude '**/tproxy/**'
+                // If you have any other old packages you want to exclude, add them here
+            }
+        }
+    }
 }
 
 dependencies {
@@ -82,11 +93,11 @@ dependencies {
     implementation "androidx.room:room-ktx:$room_version"
     kapt "androidx.room:room-compiler:$room_version"
 
-    // ---------- 🔥 NEW: libbox (sing-box Android library) ----------
+    // ---------- 🔥 libbox (sing-box Android library) ----------
     implementation files('libs/libbox.aar')
 
-    // ---------- (Optional) Remove these if you no longer need them ----------
-    // SSH is now handled by libbox, so you can remove JSch
+    // ---------- Remove old dependencies that are no longer used ----------
+    // JSch and hev are commented out – if you have them, remove these lines entirely.
     // implementation 'com.github.mwiede:jsch:0.2.16'
-    // hev-sockstun is no longer used – remove if you had it as a local lib
+    // any hev local lib
 }
