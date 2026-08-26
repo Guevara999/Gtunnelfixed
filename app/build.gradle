@@ -49,7 +49,6 @@ android {
         jvmTarget = '17'
     }
 
-    // Exclude old/unused files from compilation
     sourceSets {
         main {
             java {
@@ -63,37 +62,37 @@ android {
 }
 
 dependencies {
-    // ---------- Core Android ----------
+    // Core Android
     implementation 'androidx.core:core-ktx:1.12.0'
     implementation 'androidx.appcompat:appcompat:1.6.1'
     implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
     implementation 'androidx.fragment:fragment-ktx:1.6.2'
 
-    // ---------- UI & Material ----------
+    // UI & Material
     implementation 'com.google.android.material:material:1.11.0'
     implementation 'androidx.viewpager2:viewpager2:1.1.0'
 
-    // ---------- Lifecycle & Navigation ----------
+    // Lifecycle & Navigation
     implementation 'androidx.lifecycle:lifecycle-livedata-ktx:2.7.0'
     implementation 'androidx.lifecycle:lifecycle-viewmodel-ktx:2.7.0'
     implementation 'androidx.navigation:navigation-fragment-ktx:2.7.7'
     implementation 'androidx.navigation:navigation-ui-ktx:2.7.7'
 
-    // ---------- Local Broadcast ----------
+    // Local Broadcast
     implementation 'androidx.localbroadcastmanager:localbroadcastmanager:1.1.0'
 
-    // ---------- Coroutines ----------
+    // Coroutines
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'
 
-    // ---------- JSON ----------
+    // JSON
     implementation 'com.google.code.gson:gson:2.10.1'
 
-    // ---------- Room Database ----------
+    // Room
     def room_version = "2.6.1"
     implementation "androidx.room:room-runtime:$room_version"
     implementation "androidx.room:room-ktx:$room_version"
     kapt "androidx.room:room-compiler:$room_version"
 
-    // ---------- libbox (sing-box Android library) ----------
+    // libbox (built from source in workflow)
     implementation files('libs/libbox.aar')
 }
