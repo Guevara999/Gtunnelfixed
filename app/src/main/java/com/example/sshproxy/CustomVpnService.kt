@@ -19,11 +19,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import libbox.Service
 import libbox.TunOptions
 import libbox.PlatformInterface
-import libbox.StandaloneCommandClient
 import org.json.JSONObject
-import java.io.File
-import java.net.InetSocketAddress
-import java.net.Socket
 import java.util.concurrent.atomic.AtomicBoolean
 
 class CustomVpnService : VpnService() {
@@ -32,7 +28,7 @@ class CustomVpnService : VpnService() {
         private const val CHANNEL_ID = "vpn_channel"
         private const val NOTIFICATION_ID = 1
         private const val TAG = "CustomVpnService"
-        private const val WAKELOCK_TAG = "HttpCustom:WakeLock"
+        private const val WAKELOCK_TAG = "Gtunnel:WakeLock"
 
         const val ACTION_CONNECT = "com.example.sshproxy.CONNECT"
         const val ACTION_DISCONNECT = "com.example.sshproxy.DISCONNECT"
@@ -46,7 +42,6 @@ class CustomVpnService : VpnService() {
     private val _state = MutableStateFlow(VpnState.IDLE)
     val state: StateFlow<VpnState> = _state.asStateFlow()
 
-    // libbox service
     private var libboxService: Service? = null
     private var vpnInterface: ParcelFileDescriptor? = null
     private val isConnected = AtomicBoolean(false)
@@ -66,10 +61,7 @@ class CustomVpnService : VpnService() {
     private var pingTimeout: Int = 10000
     private var alwaysReconnect: Boolean = false
 
-    // WakeLock
     private var wakeLock: PowerManager.WakeLock? = null
-
-    // Coroutine jobs
     private var pingJob: Job? = null
     private var reconnectJob: Job? = null
     private var stateJob: Job? = null
@@ -148,7 +140,6 @@ class CustomVpnService : VpnService() {
     }
 
     private suspend fun doConnect() {
-        // 1. Create TUN interface via VpnService
         vpnInterface = Builder()
             .addAddress("172.19.0.1", 30)
             .addRoute("0.0.0.0", 0)
@@ -156,16 +147,13 @@ class CustomVpnService : VpnService() {
             .establish() ?: throw Exception("VPN interface creation failed")
         LogManager.addLog("TUN interface created (fd=${vpnInterface?.fd})")
 
-        // 2. Build sing-box config JSON
         val configJson = buildSingBoxConfig()
         LogManager.addLog("Config built:\n$configJson")
 
-        // 3. Start libbox service
         val platform = object : PlatformInterface {
             override fun getDeviceId(): String = "Gtunnel"
             override fun getDeviceName(): String = "Gtunnel"
             override fun getIsAdmin(): Boolean = true
-            // These are required but can be dummy for our use:
             override fun getSharedData(path: String?): String? = null
             override fun setSharedData(path: String?, data: String?) {}
             override fun getAppData(): String? = null
@@ -197,7 +185,6 @@ class CustomVpnService : VpnService() {
     }
 
     private fun buildSingBoxConfig(): String {
-        // Process payload using your PayloadProcessor
         val processed = PayloadProcessor.processPayload(
             payload,
             sshHost,
@@ -205,17 +192,13 @@ class CustomVpnService : VpnService() {
             proxyHost,
             customUserAgent
         )
-
-        // Parse the processed string into method, path, headers
         val (method, path, headers) = parseHttpRequest(processed)
 
-        // Determine proxy host/port (fallback to SSH if not provided)
         val realProxyHost = proxyHost.ifEmpty { sshHost }
         val realProxyPort = proxyPort.ifEmpty { sshPort }.toIntOrNull() ?: 80
 
         val outbounds = mutableListOf<Map<String, Any>>()
 
-        // HTTP outbound (payload)
         outbounds.add(
             mapOf(
                 "type" to "http",
@@ -228,7 +211,6 @@ class CustomVpnService : VpnService() {
             )
         )
 
-        // SSH outbound with detour to HTTP
         outbounds.add(
             mapOf(
                 "type" to "ssh",
@@ -256,19 +238,12 @@ class CustomVpnService : VpnService() {
         return JSONObject(config).toString()
     }
 
-    /**
-     * Parse a raw HTTP request string into (method, path, headers)
-     * Example input:
-     *   "GET /cdn-cgi/trace HTTP/1.1\r\nHost: h.facebook.com\r\nUser-Agent: Mozilla/5.0\r\n\r\n"
-     */
     private fun parseHttpRequest(raw: String): Triple<String, String, Map<String, String>> {
         val lines = raw.split("\r\n")
         if (lines.isEmpty()) return Triple("GET", "/", emptyMap())
-
         val requestLine = lines[0].split(" ")
         val method = if (requestLine.size >= 1) requestLine[0] else "GET"
         val path = if (requestLine.size >= 2) requestLine[1] else "/"
-
         val headers = mutableMapOf<String, String>()
         var i = 1
         while (i < lines.size) {
@@ -292,7 +267,6 @@ class CustomVpnService : VpnService() {
         pingJob?.cancel()
         stateJob?.cancel()
 
-        // Stop libbox
         try {
             libboxService?.stop()
             libboxService = null
@@ -301,7 +275,6 @@ class CustomVpnService : VpnService() {
             LogManager.addLog("[ERROR] Failed to stop libbox: ${e.message}")
         }
 
-        // Close TUN
         try {
             vpnInterface?.close()
             vpnInterface = null
@@ -367,11 +340,9 @@ class CustomVpnService : VpnService() {
     }
 
     private fun startReconnectMonitor() {
-        // libbox has built-in keep-alive; we can still monitor the service state
         stateJob = CoroutineScope(Dispatchers.IO).launch {
             while (isConnected.get()) {
                 delay(1000)
-                // Check if service is still alive (optional)
             }
         }
     }
