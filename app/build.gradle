@@ -49,6 +49,7 @@ android {
         jvmTarget = '17'
     }
 
+    // Exclude old/unused classes
     sourceSets {
         main {
             java {
@@ -60,8 +61,6 @@ android {
         }
     }
 }
-
-// No repositories block – all repos are in settings.gradle
 
 dependencies {
     // Core Android
@@ -95,6 +94,6 @@ dependencies {
     implementation "androidx.room:room-ktx:$room_version"
     kapt "androidx.room:room-compiler:$room_version"
 
-    // ====== LOCAL libbox (built in workflow) ======
+    // libbox – local AAR built in workflow
     implementation files('libs/libbox.aar')
 }
