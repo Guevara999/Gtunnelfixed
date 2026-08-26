@@ -24,7 +24,6 @@ class CustomVpnService : VpnService() {
     companion object {
         private const val CHANNEL_ID = "vpn_channel"
         private const val NOTIFICATION_ID = 1
-        private const val TAG = "CustomVpnService"
         private const val WAKELOCK_TAG = "Gtunnel:WakeLock"
 
         const val ACTION_CONNECT = "com.example.sshproxy.CONNECT"
@@ -43,7 +42,7 @@ class CustomVpnService : VpnService() {
     private var vpnInterface: ParcelFileDescriptor? = null
     private val isConnected = AtomicBoolean(false)
 
-    // Config fields
+    // Config
     private var sshHost: String = ""
     private var sshPort: String = ""
     private var sshUser: String = ""
@@ -73,17 +72,11 @@ class CustomVpnService : VpnService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_CONNECT -> {
-                extractConfig(intent)
-                connect()
-            }
+            ACTION_CONNECT -> { extractConfig(intent); connect() }
             ACTION_DISCONNECT -> disconnect()
             ACTION_RECONNECT -> reconnect()
-            else -> {
-                if (intent != null && intent.hasExtra("sshHost")) {
-                    extractConfig(intent)
-                    connect()
-                }
+            else -> if (intent != null && intent.hasExtra("sshHost")) {
+                extractConfig(intent); connect()
             }
         }
         return START_STICKY
@@ -122,9 +115,8 @@ class CustomVpnService : VpnService() {
         LogManager.addLog("Starting libbox tunnel...")
 
         CoroutineScope(Dispatchers.IO).launch {
-            try {
-                doConnect()
-            } catch (e: Exception) {
+            try { doConnect() }
+            catch (e: Exception) {
                 LogManager.addLog("[ERROR] Connection failed: ${e.message}")
                 e.printStackTrace()
                 _state.value = VpnState.ERROR
@@ -144,17 +136,18 @@ class CustomVpnService : VpnService() {
             .establish() ?: throw Exception("VPN interface creation failed")
         LogManager.addLog("TUN interface created (fd=${vpnInterface?.fd})")
 
-        // 2. Config JSON
+        // 2. JSON config
         val configJson = buildSingBoxConfig()
         LogManager.addLog("Config built:\n$configJson")
 
-        // 3. PlatformInterface – all methods implemented
+        // 3. PlatformInterface – include ALL methods
         val platform = object : PlatformInterface {
             override fun getInterfaces(): NetworkInterfaceIterator? = null
             override fun autoDetectInterfaceControl(fd: Int) {}
             override fun closeDefaultInterfaceMonitor(listener: InterfaceUpdateListener?) {}
             override fun clearDNSCache() {}
             override fun findConnectionOwner(fd: Int, dest: String?, port: Int, source: String?, sourcePort: Int): Int = 0
+            override fun includeAllNetworks(): Boolean = false   // <--- NEW method
             override fun getDeviceId(): String = "Gtunnel"
             override fun getDeviceName(): String = "Gtunnel"
             override fun getIsAdmin(): Boolean = true
@@ -173,12 +166,10 @@ class CustomVpnService : VpnService() {
             override fun getAndroidVPN(): String? = null
         }
 
-        // 4. TunOptions
-        val options = TunOptions()
-        options.platform = platform
-        options.configContent = configJson
+        // 4. TunOptions – use constructor (PlatformInterface, String)
+        val options = TunOptions(platform, configJson)
 
-        // 5. Start libbox service
+        // 5. Start service
         libboxService = Service()
         libboxService?.start(vpnInterface!!.fd, options)
         LogManager.addLog("libbox service started")
@@ -218,18 +209,19 @@ class CustomVpnService : VpnService() {
             )
         )
 
-        val config = mapOf(
-            "inbounds" to listOf(
-                mapOf(
-                    "type" to "tun",
-                    "inet4_address" to "172.19.0.1/30",
-                    "mtu" to mtu,
-                    "auto_route" to true
-                )
-            ),
-            "outbounds" to outbounds
-        )
-        return JSONObject(config).toString()
+        return JSONObject(
+            mapOf(
+                "inbounds" to listOf(
+                    mapOf(
+                        "type" to "tun",
+                        "inet4_address" to "172.19.0.1/30",
+                        "mtu" to mtu,
+                        "auto_route" to true
+                    )
+                ),
+                "outbounds" to outbounds
+            )
+        ).toString()
     }
 
     private fun parseHttpRequest(raw: String): Triple<String, String, Map<String, String>> {
