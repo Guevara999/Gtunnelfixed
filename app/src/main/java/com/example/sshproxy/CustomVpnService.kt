@@ -128,7 +128,6 @@ class CustomVpnService : VpnService() {
     }
 
     private suspend fun doConnect() {
-        // 1. Create TUN interface via VpnService.Builder
         vpnInterface = Builder()
             .addAddress("172.19.0.1", 30)
             .addRoute("0.0.0.0", 0)
@@ -136,11 +135,9 @@ class CustomVpnService : VpnService() {
             .establish() ?: throw Exception("VPN interface creation failed")
         LogManager.addLog("TUN interface created (fd=${vpnInterface?.fd})")
 
-        // 2. Build the sing-box JSON configuration
         val configJson = buildSingBoxConfig()
         LogManager.addLog("Config built:\n$configJson")
 
-        // 3. Implement PlatformInterface with ALL required methods (stubs)
         val platform = object : PlatformInterface {
             override fun getInterfaces(): NetworkInterfaceIterator? = null
             override fun autoDetectInterfaceControl(fd: Int) {}
@@ -156,6 +153,7 @@ class CustomVpnService : VpnService() {
             override fun includeAllNetworks(): Boolean = false
             override fun openTun(options: TunOptions?): Int = 0
             override fun packageNameByUid(uid: Int): String = ""
+            override fun readWIFIState(): WIFIState? = null   // <-- NEW METHOD
             override fun getDeviceId(): String = "Gtunnel"
             override fun getDeviceName(): String = "Gtunnel"
             override fun getIsAdmin(): Boolean = true
@@ -174,10 +172,8 @@ class CustomVpnService : VpnService() {
             override fun getAndroidVPN(): String? = null
         }
 
-        // 4. Create TunOptions with platform and config
-        val options = TunOptions(platform, configJson)
+        val options = TunOptions(platform, configJson)   // use constructor
 
-        // 5. Start libbox service
         libboxService = Service()
         libboxService?.start(vpnInterface!!.fd, options)
         LogManager.addLog("libbox service started")
