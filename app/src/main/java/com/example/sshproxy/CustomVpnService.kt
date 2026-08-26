@@ -153,47 +153,23 @@ class CustomVpnService : VpnService() {
 
         // 3. PlatformInterface implementation (all required methods)
         val platform = object : PlatformInterface {
-            // ---------- Required methods ----------
-            override fun autoDetectInterfaceControl(fd: Int) {
-                // no-op
-            }
+            override fun autoDetectInterfaceControl(fd: Int) { /* no-op */ }
+            override fun closeDefaultInterfaceMonitor(listener: InterfaceUpdateListener?) { /* no-op */ }
+            override fun clearDNSCache() { /* no-op */ }
+            override fun findConnectionOwner(fd: Int, dest: String?, port: Int, source: String?, sourcePort: Int): Int = 0
 
-            override fun closeDefaultInterfaceMonitor(listener: InterfaceUpdateListener?) {
-                // no-op
-            }
-
-            override fun clearDNSCache() {
-                // no-op
-            }
-
-            override fun findConnectionOwner(
-                fd: Int,
-                dest: String?,
-                port: Int,
-                source: String?,
-                sourcePort: Int
-            ): Int {
-                // Return 0 (owner unknown) – we don't use connection owner tracking
-                return 0
-            }
-
-            // ---------- Getters ----------
             override fun getDeviceId(): String = "Gtunnel"
             override fun getDeviceName(): String = "Gtunnel"
             override fun getIsAdmin(): Boolean = true
-
             override fun getSharedData(path: String?): String? = null
             override fun setSharedData(path: String?, data: String?) {}
-
             override fun getAppData(): String? = null
             override fun getAppPath(): String? = null
             override fun getCachePath(): String? = null
             override fun getPackageName(): String = this@CustomVpnService.packageName
             override fun isPackageInstalled(pkg: String?): Boolean = false
-
             override fun openFile(path: String?, flags: Int): ParcelFileDescriptor? = null
             override fun requirePermission(perm: String?) {}
-
             override fun getNetwork(): String? = null
             override fun getDefaultInterface(): String? = "tun0"
             override fun getInterfaceAddresses(iface: String?): List<String> = listOf()
@@ -218,20 +194,13 @@ class CustomVpnService : VpnService() {
     }
 
     private fun buildSingBoxConfig(): String {
-        val processed = PayloadProcessor.processPayload(
-            payload,
-            sshHost,
-            sshPort,
-            proxyHost,
-            customUserAgent
-        )
+        val processed = PayloadProcessor.processPayload(payload, sshHost, sshPort, proxyHost, customUserAgent)
         val (method, path, headers) = parseHttpRequest(processed)
 
         val realProxyHost = proxyHost.ifEmpty { sshHost }
         val realProxyPort = proxyPort.ifEmpty { sshPort }.toIntOrNull() ?: 80
 
         val outbounds = mutableListOf<Map<String, Any>>()
-
         outbounds.add(
             mapOf(
                 "type" to "http",
@@ -243,7 +212,6 @@ class CustomVpnService : VpnService() {
                 "headers" to headers
             )
         )
-
         outbounds.add(
             mapOf(
                 "type" to "ssh",
@@ -267,7 +235,6 @@ class CustomVpnService : VpnService() {
             ),
             "outbounds" to outbounds
         )
-
         return JSONObject(config).toString()
     }
 
