@@ -8,7 +8,6 @@ import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.os.PowerManager
-import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import com.example.sshproxy.payload.PayloadProcessor
@@ -16,9 +15,9 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import libbox.PlatformInterface
 import libbox.Service
 import libbox.TunOptions
-import libbox.PlatformInterface
 import org.json.JSONObject
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -46,7 +45,7 @@ class CustomVpnService : VpnService() {
     private var vpnInterface: ParcelFileDescriptor? = null
     private val isConnected = AtomicBoolean(false)
 
-    // Config
+    // Config fields
     private var sshHost: String = ""
     private var sshPort: String = ""
     private var sshUser: String = ""
@@ -68,7 +67,6 @@ class CustomVpnService : VpnService() {
 
     override fun onCreate() {
         super.onCreate()
-        Log.d(TAG, "SERVICE CREATED")
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, WAKELOCK_TAG)
         createNotificationChannel()
@@ -140,6 +138,7 @@ class CustomVpnService : VpnService() {
     }
 
     private suspend fun doConnect() {
+        // Create TUN interface
         vpnInterface = Builder()
             .addAddress("172.19.0.1", 30)
             .addRoute("0.0.0.0", 0)
@@ -147,10 +146,15 @@ class CustomVpnService : VpnService() {
             .establish() ?: throw Exception("VPN interface creation failed")
         LogManager.addLog("TUN interface created (fd=${vpnInterface?.fd})")
 
+        // Build sing-box JSON config
         val configJson = buildSingBoxConfig()
         LogManager.addLog("Config built:\n$configJson")
 
+        // Prepare PlatformInterface (required by libbox)
         val platform = object : PlatformInterface {
+            override fun autoDetectInterfaceControl(fd: Int) {
+                // no-op – required but not used
+            }
             override fun getDeviceId(): String = "Gtunnel"
             override fun getDeviceName(): String = "Gtunnel"
             override fun getIsAdmin(): Boolean = true
@@ -169,6 +173,7 @@ class CustomVpnService : VpnService() {
             override fun getAndroidVPN(): String? = null
         }
 
+        // Create TunOptions and start service
         val options = TunOptions()
         options.platform = platform
         options.configContent = configJson
@@ -199,6 +204,7 @@ class CustomVpnService : VpnService() {
 
         val outbounds = mutableListOf<Map<String, Any>>()
 
+        // HTTP outbound (payload)
         outbounds.add(
             mapOf(
                 "type" to "http",
@@ -211,6 +217,7 @@ class CustomVpnService : VpnService() {
             )
         )
 
+        // SSH outbound with detour to HTTP
         outbounds.add(
             mapOf(
                 "type" to "ssh",
@@ -398,6 +405,6 @@ class CustomVpnService : VpnService() {
         super.onDestroy()
         disconnect()
         releaseWakeLock()
-        Log.d(TAG, "onDestroy finished")
+        LogManager.addLog("onDestroy finished")
     }
 }
