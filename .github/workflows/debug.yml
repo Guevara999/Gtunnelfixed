@@ -30,12 +30,12 @@ jobs:
           go install golang.org/x/mobile/cmd/gomobile@latest
           gomobile init
 
-      - name: Build libbox.aar (known working commit)
+      - name: Build libbox.aar (latest stable sing-box)
         run: |
           git clone https://github.com/SagerNet/sing-box.git
           cd sing-box
-          # This is the commit for v1.10.0 – known to work with SagerNet
-          git checkout 137832ff3ef3ab4ba5fc7d50c227253b77a0d68b
+          # Use the latest release tag – change to a specific version if needed
+          git checkout v1.14.0-rc.1
           go mod tidy
           go get -tool golang.org/x/mobile/cmd/gobind
           gomobile bind -target=android -androidapi 21 -o libbox.aar ./experimental/libbox
