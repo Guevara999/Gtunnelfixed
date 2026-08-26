@@ -15,10 +15,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import libbox.InterfaceUpdateListener
-import libbox.PlatformInterface
-import libbox.Service
-import libbox.TunOptions
+import libbox.*
 import org.json.JSONObject
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -139,7 +136,7 @@ class CustomVpnService : VpnService() {
     }
 
     private suspend fun doConnect() {
-        // 1. Create TUN interface
+        // 1. TUN interface
         vpnInterface = Builder()
             .addAddress("172.19.0.1", 30)
             .addRoute("0.0.0.0", 0)
@@ -147,17 +144,17 @@ class CustomVpnService : VpnService() {
             .establish() ?: throw Exception("VPN interface creation failed")
         LogManager.addLog("TUN interface created (fd=${vpnInterface?.fd})")
 
-        // 2. Build sing-box JSON config
+        // 2. Config JSON
         val configJson = buildSingBoxConfig()
         LogManager.addLog("Config built:\n$configJson")
 
-        // 3. PlatformInterface implementation (all required methods)
+        // 3. PlatformInterface – all methods implemented
         val platform = object : PlatformInterface {
-            override fun autoDetectInterfaceControl(fd: Int) { /* no-op */ }
-            override fun closeDefaultInterfaceMonitor(listener: InterfaceUpdateListener?) { /* no-op */ }
-            override fun clearDNSCache() { /* no-op */ }
+            override fun getInterfaces(): NetworkInterfaceIterator? = null
+            override fun autoDetectInterfaceControl(fd: Int) {}
+            override fun closeDefaultInterfaceMonitor(listener: InterfaceUpdateListener?) {}
+            override fun clearDNSCache() {}
             override fun findConnectionOwner(fd: Int, dest: String?, port: Int, source: String?, sourcePort: Int): Int = 0
-
             override fun getDeviceId(): String = "Gtunnel"
             override fun getDeviceName(): String = "Gtunnel"
             override fun getIsAdmin(): Boolean = true
@@ -176,7 +173,7 @@ class CustomVpnService : VpnService() {
             override fun getAndroidVPN(): String? = null
         }
 
-        // 4. Create TunOptions and set fields
+        // 4. TunOptions
         val options = TunOptions()
         options.platform = platform
         options.configContent = configJson
@@ -200,8 +197,7 @@ class CustomVpnService : VpnService() {
         val realProxyHost = proxyHost.ifEmpty { sshHost }
         val realProxyPort = proxyPort.ifEmpty { sshPort }.toIntOrNull() ?: 80
 
-        val outbounds = mutableListOf<Map<String, Any>>()
-        outbounds.add(
+        val outbounds = listOf(
             mapOf(
                 "type" to "http",
                 "tag" to "payload",
@@ -210,9 +206,7 @@ class CustomVpnService : VpnService() {
                 "method" to method,
                 "path" to path,
                 "headers" to headers
-            )
-        )
-        outbounds.add(
+            ),
             mapOf(
                 "type" to "ssh",
                 "tag" to "ssh-out",
@@ -267,25 +261,11 @@ class CustomVpnService : VpnService() {
         pingJob?.cancel()
         stateJob?.cancel()
 
-        try {
-            libboxService?.stop()
-            libboxService = null
-            LogManager.addLog("libbox service stopped")
-        } catch (e: Exception) {
-            LogManager.addLog("[ERROR] Failed to stop libbox: ${e.message}")
-        }
-
-        try {
-            vpnInterface?.close()
-            vpnInterface = null
-        } catch (e: Exception) {
-            LogManager.addLog("[ERROR] Failed to close TUN: ${e.message}")
-        }
+        try { libboxService?.stop(); libboxService = null } catch (e: Exception) { LogManager.addLog("[ERROR] ${e.message}") }
+        try { vpnInterface?.close(); vpnInterface = null } catch (e: Exception) { LogManager.addLog("[ERROR] ${e.message}") }
 
         stopForeground(true)
-        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        notificationManager.cancel(NOTIFICATION_ID)
-
+        getSystemService(NotificationManager::class.java).cancel(NOTIFICATION_ID)
         LogManager.addLog("VPN stopped")
         releaseWakeLock()
         _state.value = VpnState.IDLE
@@ -302,15 +282,11 @@ class CustomVpnService : VpnService() {
                 LogManager.addLog("Reconnect attempt ${attempts + 1} in ${delay}ms")
                 delay(delay)
                 connect()
-                if (isConnected.get()) {
-                    attempts = 0
-                    return@launch
-                }
+                if (isConnected.get()) { attempts = 0; return@launch }
                 attempts++
             }
             if (!isConnected.get()) {
                 _state.value = VpnState.ERROR
-                LogManager.addLog("[ERROR] Reconnect failed")
                 showNotification("Reconnection failed")
             }
         }
@@ -321,77 +297,54 @@ class CustomVpnService : VpnService() {
             while (isConnected.get()) {
                 delay(pingInterval.toLong())
                 try {
-                    val url = java.net.URL(pingUrl)
-                    val conn = url.openConnection() as java.net.HttpURLConnection
+                    val conn = java.net.URL(pingUrl).openConnection() as java.net.HttpURLConnection
                     conn.connectTimeout = pingTimeout
                     conn.readTimeout = pingTimeout
                     conn.requestMethod = "GET"
-                    val code = conn.responseCode
-                    if (code in 200..299) {
-                        LogManager.addLog("Ping OK")
-                    } else {
-                        LogManager.addLog("Ping timeout (code $code)")
-                    }
-                } catch (e: Exception) {
-                    LogManager.addLog("Ping timeout")
-                }
+                    if (conn.responseCode in 200..299) LogManager.addLog("Ping OK")
+                    else LogManager.addLog("Ping timeout (code ${conn.responseCode})")
+                } catch (e: Exception) { LogManager.addLog("Ping timeout") }
             }
         }
     }
 
     private fun startReconnectMonitor() {
         stateJob = CoroutineScope(Dispatchers.IO).launch {
-            while (isConnected.get()) {
-                delay(1000)
-            }
+            while (isConnected.get()) delay(1000)
         }
     }
 
     private fun startStateMonitoring() {
         stateJob = CoroutineScope(Dispatchers.Main).launch {
-            state.collect { vpnState ->
-                sendStatus(vpnState.name)
-            }
+            state.collect { sendStatus(it.name) }
         }
     }
 
     private fun sendStatus(status: String) {
-        val intent = Intent("VPN_STATUS")
-        intent.putExtra("status", status)
-        LocalBroadcastManager.getInstance(this).sendBroadcast(intent)
+        LocalBroadcastManager.getInstance(this).sendBroadcast(Intent("VPN_STATUS").putExtra("status", status))
     }
 
     private fun showNotification(message: String) {
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Gtunnel")
-            .setContentText(message)
+            .setContentTitle("Gtunnel").setContentText(message)
             .setSmallIcon(android.R.drawable.ic_menu_share)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .build()
+            .setPriority(NotificationCompat.PRIORITY_LOW).build()
         startForeground(NOTIFICATION_ID, notification)
     }
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(CHANNEL_ID, "VPN", NotificationManager.IMPORTANCE_LOW)
-            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+            getSystemService(NotificationManager::class.java)
+                .createNotificationChannel(NotificationChannel(CHANNEL_ID, "VPN", NotificationManager.IMPORTANCE_LOW))
         }
     }
 
     private fun acquireWakeLock() {
-        try {
-            wakeLock?.acquire(10 * 60 * 1000L)
-        } catch (e: Exception) {
-            LogManager.addLog("[ERROR] WakeLock acquire failed: ${e.message}")
-        }
+        try { wakeLock?.acquire(10 * 60 * 1000L) } catch (e: Exception) { LogManager.addLog("[ERROR] ${e.message}") }
     }
 
     private fun releaseWakeLock() {
-        try {
-            if (wakeLock?.isHeld == true) wakeLock?.release()
-        } catch (e: Exception) {
-            LogManager.addLog("[ERROR] WakeLock release failed: ${e.message}")
-        }
+        try { if (wakeLock?.isHeld == true) wakeLock?.release() } catch (e: Exception) { LogManager.addLog("[ERROR] ${e.message}") }
     }
 
     override fun onDestroy() {
