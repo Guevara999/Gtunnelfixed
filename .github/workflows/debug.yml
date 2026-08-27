@@ -20,14 +20,21 @@ jobs:
           java-version: '17'
           cache: gradle
 
-      # Download sing-box CLI binary (arm64)
-      - name: Download sing-box binary
+      # Download and extract sing-box CLI binary (arm64)
+      - name: Download and extract sing-box binary
         run: |
           mkdir -p app/src/main/assets
           VERSION="1.13.14"
           URL="https://github.com/SagerNet/sing-box/releases/download/v${VERSION}/sing-box-${VERSION}-android-arm64.tar.gz"
           wget -L -q --show-progress $URL -O sing-box.tar.gz
-          tar -xzf sing-box.tar.gz -C app/src/main/assets/
+          tar -xzf sing-box.tar.gz
+          # The binary is inside a directory named like "sing-box-${VERSION}-android-arm64"
+          if [ -f "sing-box-${VERSION}-android-arm64/sing-box" ]; then
+            cp "sing-box-${VERSION}-android-arm64/sing-box" app/src/main/assets/
+          else
+            # Fallback: find it anywhere
+            find . -name sing-box -exec cp {} app/src/main/assets/ \;
+          fi
           chmod +x app/src/main/assets/sing-box
           ls -la app/src/main/assets/
 
