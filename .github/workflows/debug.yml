@@ -25,32 +25,20 @@ jobs:
         with:
           go-version: '1.24'
 
-      - name: Install gomobile (sagernet version)
+      - name: Install gomobile
         run: |
-          go install github.com/sagernet/gomobile/cmd/gomobile@latest
+          go install golang.org/x/mobile/cmd/gomobile@latest
           gomobile init
 
-      - name: Build libbox.aar using official script
+      - name: Build libbox.aar (sing‑box v1.10.0)
         run: |
-          git clone https://github.com/SagerNet/sing-box.git
+          git clone --depth 1 --branch v1.10.0 https://github.com/SagerNet/sing-box.git
           cd sing-box
-          git checkout v1.14.0-rc.1
-          go run ./cmd/internal/build_libbox -target android
-          # The script places the AAR in the root
-          if [ -f libbox.aar ]; then
-            mkdir -p ../app/libs
-            cp libbox.aar ../app/libs/
-          else
-            # Fallback: search for it
-            AAR=$(find . -name "*.aar" | head -n 1)
-            if [ -n "$AAR" ]; then
-              mkdir -p ../app/libs
-              cp "$AAR" ../app/libs/libbox.aar
-            else
-              echo "No AAR found"
-              exit 1
-            fi
-          fi
+          go mod tidy
+          go get -tool golang.org/x/mobile/cmd/gobind
+          gomobile bind -target=android -androidapi 21 -o libbox.aar ./experimental/libbox
+          mkdir -p ../app/libs
+          cp libbox.aar ../app/libs/
 
       - name: Verify libbox.aar
         run: ls -la app/libs/libbox.aar
