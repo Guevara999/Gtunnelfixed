@@ -26,7 +26,6 @@ class CustomVpnService : VpnService() {
         private const val CHANNEL_ID = "vpn_channel"
         private const val NOTIFICATION_ID = 1
         private const val WAKELOCK_TAG = "Gtunnel:WakeLock"
-        private const val TAG = "CustomVpnService"
 
         const val ACTION_CONNECT = "com.example.sshproxy.CONNECT"
         const val ACTION_DISCONNECT = "com.example.sshproxy.DISCONNECT"
@@ -131,13 +130,13 @@ class CustomVpnService : VpnService() {
     }
 
     private suspend fun doConnect() {
-        // 1. Prepare config JSON
+        // 1. Build JSON config
         val configJson = buildSingBoxConfig()
         val configFile = File(cacheDir, "config.json")
         configFile.writeText(configJson)
         LogManager.addLog("Config written to ${configFile.absolutePath}")
 
-        // 2. Extract sing-box binary from assets
+        // 2. Extract binary from assets
         val binaryFile = File(cacheDir, "sing-box")
         if (!binaryFile.exists()) {
             assets.open("sing-box").use { input ->
@@ -149,7 +148,7 @@ class CustomVpnService : VpnService() {
         }
         LogManager.addLog("Binary ready at ${binaryFile.absolutePath}")
 
-        // 3. Create TUN interface (required by sing-box)
+        // 3. Create TUN interface
         vpnInterface = Builder()
             .addAddress("172.19.0.1", 30)
             .addRoute("0.0.0.0", 0)
@@ -157,7 +156,7 @@ class CustomVpnService : VpnService() {
             .establish() ?: throw Exception("VPN interface creation failed")
         LogManager.addLog("TUN interface created (fd=${vpnInterface?.fd})")
 
-        // 4. Run sing-box with the config and the TUN fd
+        // 4. Run sing-box
         val processBuilder = ProcessBuilder(
             binaryFile.absolutePath,
             "-c", configFile.absolutePath,
@@ -167,7 +166,7 @@ class CustomVpnService : VpnService() {
         processBuilder.redirectErrorStream(true)
         process = processBuilder.start()
 
-        // Read output in background (optional)
+        // Read output
         CoroutineScope(Dispatchers.IO).launch {
             process?.inputStream?.bufferedReader()?.forEachLine {
                 LogManager.addLog("[sing-box] $it")
@@ -254,7 +253,6 @@ class CustomVpnService : VpnService() {
         pingJob?.cancel()
         stateJob?.cancel()
 
-        // Stop sing-box process
         try {
             process?.destroy()
             process?.waitFor()
@@ -264,7 +262,6 @@ class CustomVpnService : VpnService() {
             LogManager.addLog("[ERROR] Failed to stop process: ${e.message}")
         }
 
-        // Close TUN
         try {
             vpnInterface?.close()
             vpnInterface = null
