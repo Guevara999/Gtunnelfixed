@@ -128,7 +128,7 @@ class CustomVpnService : VpnService() {
     }
 
     private suspend fun doConnect() {
-        // 1. Create TUN interface
+        // 1. TUN interface
         vpnInterface = Builder()
             .addAddress("172.19.0.1", 30)
             .addRoute("0.0.0.0", 0)
@@ -140,11 +140,12 @@ class CustomVpnService : VpnService() {
         val configJson = buildSingBoxConfig()
         LogManager.addLog("Config built:\n$configJson")
 
-        // 3. PlatformInterface – includes readWIFIState for compatibility
+        // 3. PlatformInterface – ALL methods for v1.10.0
         val platform = object : PlatformInterface {
             override fun getInterfaces(): NetworkInterfaceIterator? = null
             override fun autoDetectInterfaceControl(fd: Int) {}
             override fun closeDefaultInterfaceMonitor(listener: InterfaceUpdateListener?) {}
+            override fun startDefaultInterfaceMonitor(listener: InterfaceUpdateListener?) {}  // <-- ADDED
             override fun clearDNSCache() {}
             override fun findConnectionOwner(
                 fd: Int,
@@ -156,7 +157,7 @@ class CustomVpnService : VpnService() {
             override fun includeAllNetworks(): Boolean = false
             override fun openTun(options: TunOptions?): Int = 0
             override fun packageNameByUid(uid: Int): String = ""
-            override fun readWIFIState(): WIFIState? = null   // <-- Added to be safe
+            override fun readWIFIState(): WIFIState? = null
             override fun getDeviceId(): String = "Gtunnel"
             override fun getDeviceName(): String = "Gtunnel"
             override fun getIsAdmin(): Boolean = true
@@ -175,7 +176,7 @@ class CustomVpnService : VpnService() {
             override fun getAndroidVPN(): String? = null
         }
 
-        // 4. TunOptions – try both styles; we'll use the no-arg constructor first
+        // 4. TunOptions – no-arg constructor + properties (works for v1.10.0)
         val options = TunOptions()
         options.platform = platform
         options.configContent = configJson
