@@ -15,8 +15,9 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import libbox.*
 import org.json.JSONObject
+import java.io.File
+import java.io.FileOutputStream
 import java.util.concurrent.atomic.AtomicBoolean
 
 class CustomVpnService : VpnService() {
@@ -25,6 +26,7 @@ class CustomVpnService : VpnService() {
         private const val CHANNEL_ID = "vpn_channel"
         private const val NOTIFICATION_ID = 1
         private const val WAKELOCK_TAG = "Gtunnel:WakeLock"
+        private const val TAG = "CustomVpnService"
 
         const val ACTION_CONNECT = "com.example.sshproxy.CONNECT"
         const val ACTION_DISCONNECT = "com.example.sshproxy.DISCONNECT"
@@ -38,11 +40,11 @@ class CustomVpnService : VpnService() {
     private val _state = MutableStateFlow(VpnState.IDLE)
     val state: StateFlow<VpnState> = _state.asStateFlow()
 
-    private var libboxService: Service? = null
+    private var process: Process? = null
     private var vpnInterface: ParcelFileDescriptor? = null
     private val isConnected = AtomicBoolean(false)
 
-    // Config
+    // Config fields
     private var sshHost: String = ""
     private var sshPort: String = ""
     private var sshUser: String = ""
@@ -112,11 +114,12 @@ class CustomVpnService : VpnService() {
         _state.value = VpnState.CONNECTING
         acquireWakeLock()
         showNotification("Connecting...")
-        LogManager.addLog("Starting libbox tunnel...")
+        LogManager.addLog("Starting sing-box CLI...")
 
         CoroutineScope(Dispatchers.IO).launch {
-            try { doConnect() }
-            catch (e: Exception) {
+            try {
+                doConnect()
+            } catch (e: Exception) {
                 LogManager.addLog("[ERROR] Connection failed: ${e.message}")
                 e.printStackTrace()
                 _state.value = VpnState.ERROR
@@ -128,7 +131,25 @@ class CustomVpnService : VpnService() {
     }
 
     private suspend fun doConnect() {
-        // 1. TUN interface
+        // 1. Prepare config JSON
+        val configJson = buildSingBoxConfig()
+        val configFile = File(cacheDir, "config.json")
+        configFile.writeText(configJson)
+        LogManager.addLog("Config written to ${configFile.absolutePath}")
+
+        // 2. Extract sing-box binary from assets
+        val binaryFile = File(cacheDir, "sing-box")
+        if (!binaryFile.exists()) {
+            assets.open("sing-box").use { input ->
+                FileOutputStream(binaryFile).use { output ->
+                    input.copyTo(output)
+                }
+            }
+            binaryFile.setExecutable(true)
+        }
+        LogManager.addLog("Binary ready at ${binaryFile.absolutePath}")
+
+        // 3. Create TUN interface (required by sing-box)
         vpnInterface = Builder()
             .addAddress("172.19.0.1", 30)
             .addRoute("0.0.0.0", 0)
@@ -136,56 +157,24 @@ class CustomVpnService : VpnService() {
             .establish() ?: throw Exception("VPN interface creation failed")
         LogManager.addLog("TUN interface created (fd=${vpnInterface?.fd})")
 
-        // 2. Build sing-box JSON config
-        val configJson = buildSingBoxConfig()
-        LogManager.addLog("Config built:\n$configJson")
+        // 4. Run sing-box with the config and the TUN fd
+        val processBuilder = ProcessBuilder(
+            binaryFile.absolutePath,
+            "-c", configFile.absolutePath,
+            "--tun",
+            "--tun-fd", vpnInterface!!.fd.toString()
+        )
+        processBuilder.redirectErrorStream(true)
+        process = processBuilder.start()
 
-        // 3. PlatformInterface – ALL methods for v1.10.0
-        val platform = object : PlatformInterface {
-            override fun getInterfaces(): NetworkInterfaceIterator? = null
-            override fun autoDetectInterfaceControl(fd: Int) {}
-            override fun closeDefaultInterfaceMonitor(listener: InterfaceUpdateListener?) {}
-            override fun startDefaultInterfaceMonitor(listener: InterfaceUpdateListener?) {}  // <-- ADDED
-            override fun clearDNSCache() {}
-            override fun findConnectionOwner(
-                fd: Int,
-                dest: String?,
-                port: Int,
-                source: String?,
-                sourcePort: Int
-            ): Int = 0
-            override fun includeAllNetworks(): Boolean = false
-            override fun openTun(options: TunOptions?): Int = 0
-            override fun packageNameByUid(uid: Int): String = ""
-            override fun readWIFIState(): WIFIState? = null
-            override fun getDeviceId(): String = "Gtunnel"
-            override fun getDeviceName(): String = "Gtunnel"
-            override fun getIsAdmin(): Boolean = true
-            override fun getSharedData(path: String?): String? = null
-            override fun setSharedData(path: String?, data: String?) {}
-            override fun getAppData(): String? = null
-            override fun getAppPath(): String? = null
-            override fun getCachePath(): String? = null
-            override fun getPackageName(): String = this@CustomVpnService.packageName
-            override fun isPackageInstalled(pkg: String?): Boolean = false
-            override fun openFile(path: String?, flags: Int): ParcelFileDescriptor? = null
-            override fun requirePermission(perm: String?) {}
-            override fun getNetwork(): String? = null
-            override fun getDefaultInterface(): String? = "tun0"
-            override fun getInterfaceAddresses(iface: String?): List<String> = listOf()
-            override fun getAndroidVPN(): String? = null
+        // Read output in background (optional)
+        CoroutineScope(Dispatchers.IO).launch {
+            process?.inputStream?.bufferedReader()?.forEachLine {
+                LogManager.addLog("[sing-box] $it")
+            }
         }
 
-        // 4. TunOptions – no-arg constructor + properties (works for v1.10.0)
-        val options = TunOptions()
-        options.platform = platform
-        options.configContent = configJson
-
-        // 5. Start libbox service
-        libboxService = Service()
-        libboxService?.start(vpnInterface!!.fd, options)
-        LogManager.addLog("libbox service started")
-
+        LogManager.addLog("sing-box process started with PID ${process?.pid()}")
         isConnected.set(true)
         _state.value = VpnState.CONNECTED
         showNotification("Connected ✓")
@@ -265,8 +254,23 @@ class CustomVpnService : VpnService() {
         pingJob?.cancel()
         stateJob?.cancel()
 
-        try { libboxService?.stop(); libboxService = null } catch (e: Exception) { LogManager.addLog("[ERROR] ${e.message}") }
-        try { vpnInterface?.close(); vpnInterface = null } catch (e: Exception) { LogManager.addLog("[ERROR] ${e.message}") }
+        // Stop sing-box process
+        try {
+            process?.destroy()
+            process?.waitFor()
+            process = null
+            LogManager.addLog("sing-box process stopped")
+        } catch (e: Exception) {
+            LogManager.addLog("[ERROR] Failed to stop process: ${e.message}")
+        }
+
+        // Close TUN
+        try {
+            vpnInterface?.close()
+            vpnInterface = null
+        } catch (e: Exception) {
+            LogManager.addLog("[ERROR] Failed to close TUN: ${e.message}")
+        }
 
         stopForeground(true)
         getSystemService(NotificationManager::class.java).cancel(NOTIFICATION_ID)
