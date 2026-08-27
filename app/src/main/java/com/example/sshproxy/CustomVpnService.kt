@@ -140,7 +140,7 @@ class CustomVpnService : VpnService() {
         val configJson = buildSingBoxConfig()
         LogManager.addLog("Config built:\n$configJson")
 
-        // 3. PlatformInterface – all methods required by v1.10.0
+        // 3. PlatformInterface – includes readWIFIState for compatibility
         val platform = object : PlatformInterface {
             override fun getInterfaces(): NetworkInterfaceIterator? = null
             override fun autoDetectInterfaceControl(fd: Int) {}
@@ -156,6 +156,7 @@ class CustomVpnService : VpnService() {
             override fun includeAllNetworks(): Boolean = false
             override fun openTun(options: TunOptions?): Int = 0
             override fun packageNameByUid(uid: Int): String = ""
+            override fun readWIFIState(): WIFIState? = null   // <-- Added to be safe
             override fun getDeviceId(): String = "Gtunnel"
             override fun getDeviceName(): String = "Gtunnel"
             override fun getIsAdmin(): Boolean = true
@@ -174,7 +175,7 @@ class CustomVpnService : VpnService() {
             override fun getAndroidVPN(): String? = null
         }
 
-        // 4. TunOptions – use no-arg constructor and set properties
+        // 4. TunOptions – try both styles; we'll use the no-arg constructor first
         val options = TunOptions()
         options.platform = platform
         options.configContent = configJson
