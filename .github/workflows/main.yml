@@ -20,18 +20,31 @@ jobs:
           java-version: '17'
           cache: gradle
 
-      # Download sing-box binary for arm64-v8a (change to armeabi-v7a if needed)
-      - name: Download sing-box binary
+      # Download sing-box binary for arm64-v8a
+      - name: Download and extract sing-box binary
         run: |
           mkdir -p app/src/main/assets
-          # Use the latest stable version (e.g., 1.10.0)
           VERSION="1.10.0"
           URL="https://github.com/SagerNet/sing-box/releases/download/v${VERSION}/sing-box-${VERSION}-android-arm64.zip"
-          wget -q $URL -O sing-box.zip
+          echo "Downloading from $URL"
+          wget -L -q --show-progress $URL -O sing-box.zip
+          if [ $? -ne 0 ]; then
+            echo "Download failed. Trying alternate URL..."
+            # Fallback: use the latest release
+            URL="https://github.com/SagerNet/sing-box/releases/latest/download/sing-box-${VERSION}-android-arm64.zip"
+            wget -L -q --show-progress $URL -O sing-box.zip
+          fi
+          # List zip contents
+          unzip -l sing-box.zip
+          # Extract the binary (it's usually directly in the root of the zip)
           unzip -j sing-box.zip sing-box -d app/src/main/assets/
+          # If the extraction failed because the file is in a subfolder, find and copy it
+          if [ ! -f app/src/main/assets/sing-box ]; then
+            echo "Binary not found in root, searching..."
+            unzip -j sing-box.zip "*/sing-box" -d app/src/main/assets/
+          fi
           chmod +x app/src/main/assets/sing-box
-          # Ensure executable permission is preserved in Git (if you commit)
-          git update-index --chmod=+x app/src/main/assets/sing-box
+          ls -la app/src/main/assets/
 
       - name: Make gradlew executable
         run: chmod +x gradlew
