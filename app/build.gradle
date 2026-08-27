@@ -49,6 +49,7 @@ android {
         jvmTarget = '17'
     }
 
+    // Exclude any old hev/tproxy code if it still exists (optional)
     sourceSets {
         main {
             java {
@@ -93,6 +94,8 @@ dependencies {
     implementation "androidx.room:room-ktx:$room_version"
     kapt "androidx.room:room-compiler:$room_version"
 
-    // libbox – local AAR built in workflow
-    implementation files('libs/libbox.aar')
+    // ================================================================
+    // ❌ REMOVED: implementation files('libs/libbox.aar')
+    // We now use the sing-box CLI binary (bundled in assets)
+    // ================================================================
 }
