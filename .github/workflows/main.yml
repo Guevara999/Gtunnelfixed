@@ -20,28 +20,18 @@ jobs:
           java-version: '17'
           cache: gradle
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.24'
-
-      - name: Install gomobile
+      # Download sing-box binary for arm64-v8a (change to armeabi-v7a if needed)
+      - name: Download sing-box binary
         run: |
-          go install golang.org/x/mobile/cmd/gomobile@latest
-          gomobile init
-
-      - name: Build libbox.aar (sing‑box v1.10.0)
-        run: |
-          git clone --depth 1 --branch v1.10.0 https://github.com/SagerNet/sing-box.git
-          cd sing-box
-          go mod tidy
-          go get -tool golang.org/x/mobile/cmd/gobind
-          gomobile bind -target=android -androidapi 21 -o libbox.aar ./experimental/libbox
-          mkdir -p ../app/libs
-          cp libbox.aar ../app/libs/
-
-      - name: Verify libbox.aar
-        run: ls -la app/libs/libbox.aar
+          mkdir -p app/src/main/assets
+          # Use the latest stable version (e.g., 1.10.0)
+          VERSION="1.10.0"
+          URL="https://github.com/SagerNet/sing-box/releases/download/v${VERSION}/sing-box-${VERSION}-android-arm64.zip"
+          wget -q $URL -O sing-box.zip
+          unzip -j sing-box.zip sing-box -d app/src/main/assets/
+          chmod +x app/src/main/assets/sing-box
+          # Ensure executable permission is preserved in Git (if you commit)
+          git update-index --chmod=+x app/src/main/assets/sing-box
 
       - name: Make gradlew executable
         run: chmod +x gradlew
