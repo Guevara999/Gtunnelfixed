@@ -32,8 +32,10 @@ jobs:
 
       - name: Build libbox.aar (sing‑box v1.10.0)
         run: |
-          git clone --depth 1 --branch v1.10.0 https://github.com/SagerNet/sing-box.git
+          # Full clone to ensure we get the tag
+          git clone https://github.com/SagerNet/sing-box.git
           cd sing-box
+          git checkout v1.10.0
           go mod tidy
           go get -tool golang.org/x/mobile/cmd/gobind
           gomobile bind -target=android -androidapi 21 -o libbox.aar ./experimental/libbox
